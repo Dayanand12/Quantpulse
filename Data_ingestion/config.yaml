@@ -1,0 +1,12 @@
+zerodha:
+  api_key: "1bfpnkeo1p80nft7"
+  api_secret: "79f7qex01cj53h3l0a1rtj78t3di2uu7"
+  access_token: "" 
+
+settings:
+  #exchange: "MCX"
+  exchange: "NSE"
+  interval: "5minute"
+  from_date: "2025-08-20"
+  to_date: "2025-08-27"
+
