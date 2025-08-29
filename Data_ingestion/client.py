@@ -30,6 +30,9 @@ class ZerodhaClient:
 
         self.kite = KiteConnect(api_key=self.api_key)
 
+        # Initialize market_data dict here
+        self.market_data = {} 
+
         # If access_token not available, trigger login flow
         if not self.access_token:
             self.access_token = self._auto_generate_access_token()
@@ -121,28 +124,41 @@ class ZerodhaClient:
     def start_live_data(self, symbols, exchange):
         """Stream live ticks via WebSocket with auto-reconnect."""
         exchange = exchange or self.exchange
-        tokens = [self.get_instrument_token(sym, exchange) for sym in symbols]
+        tokens = {self.get_instrument_token(sym, exchange): sym for sym in symbols}
 
-        self.live_ticks = []
+        # dict that stores the latest tick for each symbol
+        self.market_data = {}
+
         def on_ticks(ws, ticks):
-            self.live_ticks = ticks
-
             for tick in ticks:
-                token = tick['instrument_token']
+                token = tick["instrument_token"]
+                symbol = tokens.get(token, str(token))  # map token back to symbol
                 ltp = tick['last_price']
-                ohlc = tick.get('ohlc', {})  # sometimes OHLC may be missing
+                ohlc = tick.get('ohlc', {})
                 open_price = ohlc.get('open')
                 high_price = ohlc.get('high')
                 low_price = ohlc.get('low')
                 close_price = ohlc.get('close')
                 volume = tick.get('volume_traded', 0)
 
-                print(f"Token: {token} | LTP: {ltp} | O: {open_price} | H: {high_price} | L: {low_price} | C: {close_price} | Volume: {volume}")
+            # store in dict
+            self.market_data[symbol] = {
+                "Token": token,
+                "LTP": ltp,
+                "O": open_price,
+                "H": high_price,
+                "L": low_price,
+                "C": close_price,
+                "Volume": volume
+            }
+
+            # optional: print only updated row
+            #print(f"{symbol}: {self.market_data[symbol]}")
 
         def on_connect(ws, response):
             logging.info("Connected. Subscribing...")
-            ws.subscribe(tokens)
-            ws.set_mode(ws.MODE_FULL, tokens)
+            ws.subscribe(list(tokens.keys()))
+            ws.set_mode(ws.MODE_FULL, list(tokens.keys()))
 
         def on_close(ws, code, reason):
             logging.warning(f"Connection closed: {reason}")
@@ -169,6 +185,7 @@ class ZerodhaClient:
 
         logging.info("Starting live data stream...")
         self.kws.connect(threaded=True, disable_ssl_verification=False)
+
 
 
 # -------------------------

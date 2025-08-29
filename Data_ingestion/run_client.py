@@ -7,12 +7,12 @@ import os
 import pandas as pd
 import time
 
-
+# -------------------------
+# Initialize client
+# -------------------------
 def init_client(config_file="config.yaml"):
-    """Initialize Zerodha client from config."""
     config = load_config(config_file)
     exchange = config["settings"]["exchange"]
-    print(exchange)
     client = ZerodhaClient(
         exchange,
         api_key=config["zerodha"]["api_key"],
@@ -20,10 +20,12 @@ def init_client(config_file="config.yaml"):
         access_token=None  # auto-generate if missing
     )
     return client, config
-        
 
+
+# -------------------------
+# Fetch Historical Data
+# -------------------------
 def fetch_historical(config_file="config.yaml", stocks_file="stocks.json", output_dir="historical_data"):
-    """Fetch historical data and save to CSV."""
     config = load_config(config_file)
     stocks = load_stocks(stocks_file)
 
@@ -34,9 +36,8 @@ def fetch_historical(config_file="config.yaml", stocks_file="stocks.json", outpu
     hist = data_manager.fetch_all_historical(stocks)
 
     os.makedirs(output_dir, exist_ok=True)
-
     for symbol, data in hist.items():
-        if data:  # only if not empty
+        if data:
             df = pd.DataFrame(data)
             file_path = f"{output_dir}/{symbol}_historical.csv"
             df.to_csv(file_path, index=False)
@@ -45,8 +46,10 @@ def fetch_historical(config_file="config.yaml", stocks_file="stocks.json", outpu
     return hist
 
 
+# -------------------------
+# Start Live Data
+# -------------------------
 def start_live(config_file="config.yaml", stocks_file="stocks.json"):
-    """Start live WebSocket streaming."""
     config = load_config(config_file)
     stocks = load_stocks(stocks_file)
     exchange = config["settings"]["exchange"]
@@ -54,14 +57,11 @@ def start_live(config_file="config.yaml", stocks_file="stocks.json"):
     client, _ = init_client(config_file)
     data_manager = DataManager(client, config)
 
+    # Ensure market_data dict exists immediately
+    client.market_data = {}
+
     print("📡 Starting live data stream...")
     client.start_live_data(stocks, exchange)
 
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("⏹ Exiting...")
-        client.kws.close()
-
+    # Return the client so main can access market_data
     return client
