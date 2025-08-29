@@ -23,8 +23,7 @@ class ZerodhaClient:
         self.api_key = api_key or os.getenv("API_KEY")
         self.api_secret = api_secret or os.getenv("API_SECRET")
         self.access_token = access_token or os.getenv("ACCESS_TOKEN")
-        self.exchange= exchange
-
+        self.exchange = exchange
 
         if not self.api_key or not self.api_secret:
             raise ValueError("❌ API_KEY and API_SECRET must be set in .env file")
@@ -35,9 +34,10 @@ class ZerodhaClient:
         if not self.access_token:
             self.access_token = self._auto_generate_access_token()
 
-        # Set access token in KiteConnect
+        # ✅ Now that token is ready, set it in KiteConnect and create KiteTicker
         self.kite.set_access_token(self.access_token)
         self.kws = KiteTicker(self.api_key, self.access_token)
+
 
     def _auto_generate_access_token(self):
         """Automatic login using Flask + browser."""
@@ -179,3 +179,21 @@ if __name__ == "__main__":
     quote = client.get_live_quote("INFY")
     print("Live Quote:", quote)
     # client.start_live_data(["INFY", "TCS"])
+
+
+#######################################################################
+'''# Call indicators with default parameters
+print("RSI:", ind.rsi(df).to_list())  # Default period=14 → You can change it by passing period=21, period=7, etc.
+print("MACD:", ind.macd(df))  # Default fast=12, slow=26, signal=9 → Override with macd(df, fast=8, slow=21, signal=5)
+print("Bollinger Bands:", ind.bollinger_bands(df))  # Default period=20, std=2 → Override with bollinger_bands(df, period=14, std=2.5)
+print("VWAP:", ind.vwap(df).to_list())  # VWAP is cumulative → No main parameter, but you must ensure df has 'volume'
+print("ADX:", ind.adx(df).to_list())  # Default period=14 → Override with adx(df, period=10)
+print("EMV:", ind.emv(df).to_list())  # Default period=14 → Override with emv(df, period=20)
+
+# Override parameters easily
+print("Custom RSI:", ind.rsi(df, period=21).to_list())  # Example: RSI with 21-period instead of 14
+print("Custom MACD:", ind.macd(df, fast=8, slow=21, signal=5))  # Example: Faster MACD settings
+print("Custom Bollinger Bands:", ind.bollinger_bands(df, period=14, std=2.5))  # Example: Narrower period, higher deviation
+print("Custom ADX:", ind.adx(df, period=10).to_list())  # Example: Shorter ADX period
+print("Custom EMV:", ind.emv(df, period=20).to_list())  # Example: Longer EMV period'''
+##########################################################################################################

@@ -1,0 +1,13 @@
+# Absolute risk money per trade (INR / currency)
+risk_per_trade: 1000.0
+
+# Reward : Risk multiplier
+reward_to_risk: 2.0
+
+# Trailing trigger expressed as R:R (activate trailing after reaching X * stoploss)
+trailing_trigger_rr: 1.5
+
+
+
+# whether to simulate (paper) or live
+paper_trade: True
