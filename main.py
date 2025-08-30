@@ -5,9 +5,23 @@ from typing import List, Dict, Any
 import talib
 from Data_ingestion.config_loader import load_stocks
 import pandas as pd
-
 from ind.ind import get_symbol_history
 
+
+
+
+# strategy.py
+from stratergies.niftydayfut import run_strategy, StrategyConfig
+from ind.trend_ind import IndicatorCalculator
+# Config for strategy
+config = StrategyConfig(
+    ema_fast=20,
+    ema_slow=50,
+    rsi_period=14,
+    rsi_buy=30,
+    rsi_sell=70,
+    orb_minutes=15
+)
 
 
 
@@ -21,9 +35,7 @@ if __name__ == "__main__":
     #hist = fetch_historical("Data_ingestion/config.yaml", "Data_ingestion/stocks.json")
     hist = fetch_historical_ind("Data_ingestion/config.yaml", "Data_ingestion/stocks.json")
     symbols=load_stocks("Data_ingestion/stocks.json")
-    
-    
-
+ 
     #print("✅ Historical DataFrame ready:", df.columns)
 
     # Start live client
@@ -34,20 +46,18 @@ if __name__ == "__main__":
             latest_data = client.market_data
             #ltp = latest_data.get(symbols, {}).get("LTP")
             ltp_map = {symbol: latest_data.get(symbol, {}).get("LTP") for symbol in symbols}
-            
-
-      
-            RSI = {}   # create once before loop
-
             for symbol, ltp in ltp_map.items():   # ltp_map = {"HSCL": 445.9, "INFY": 1469.6}
                 if ltp is not None:
                     df = get_symbol_history(hist, symbol, period=14, current_price=ltp)
-                    rsi = talib.RSI(df["close"], timeperiod=14)
-                    rsi = rsi.dropna()  # drop NaN
-                    if len(rsi) > 1:    # ensure enough values
-                        RSI[symbol] = rsi.iloc[-2]
-
-            print("RSI:", RSI)
+                    rsi  = IndicatorCalculator.rsi(symbol, df, 14)
+                    ema  = IndicatorCalculator.ema(symbol, df, 20)
+                    macd = IndicatorCalculator.macd(symbol, df)
+                    adx  = IndicatorCalculator.adx(symbol, df, 14)
+                    atr  = IndicatorCalculator.atr(symbol, df, 14)
+                    vwap = IndicatorCalculator.vwap(symbol, df)
+                    orb  = IndicatorCalculator.orb(symbol, df, N=15)
+                    signals = run_strategy(df, symbol, config)
+                    
 
 
 

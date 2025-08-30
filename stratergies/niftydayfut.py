@@ -1,41 +1,41 @@
-# strategy_engine.py
+# strategy.py
 import polars as pl
 import talib
-import dataclass
+from dataclasses import dataclass
+from ind.trend_ind import IndicatorCalculator
+
 
 @dataclass
 class StrategyConfig:
-    def __init__(self,
-                 ema_fast=20,
-                 ema_slow=50,
-                 rsi_period=14,
-                 rsi_buy=30,
-                 rsi_sell=70,
-                 orb_minutes=15):
-        self.ema_fast = ema_fast
-        self.ema_slow = ema_slow
-        self.rsi_period = rsi_period
-        self.rsi_buy = rsi_buy
-        self.rsi_sell = rsi_sell
-        self.orb_minutes = orb_minutes
+    ema_fast: int = 20
+    ema_slow: int = 50
+    rsi_period: int = 14
+    rsi_buy: int = 30
+    rsi_sell: int = 70
+    orb_minutes: int = 15
 
-def run_strategy(df: pl.DataFrame, config: StrategyConfig):
+
+def run_strategy(df: pl.DataFrame, symbol: str, config: StrategyConfig):
     """
-    Run strategy on OHLCV DataFrame.
+    Run strategy on OHLCV DataFrame using IndicatorCalculator.
     Returns: Polars DataFrame with Buy/Sell signals only.
     """
 
-    # Convert to pandas because talib works on numpy
-    pdf = df.to_pandas()
+    # Convert Polars -> Pandas (for TA-Lib + IndicatorCalculator)
+    pdf = df.copy()
 
     # Indicators
-    pdf["EMA_FAST"] = talib.EMA(pdf["close"], timeperiod=config.ema_fast)
-    pdf["EMA_SLOW"] = talib.EMA(pdf["close"], timeperiod=config.ema_slow)
-    pdf["RSI"] = talib.RSI(pdf["close"], timeperiod=config.rsi_period)
+    rsi  = IndicatorCalculator.rsi(symbol, pdf, config.rsi_period)
+    ema_fast = IndicatorCalculator.ema(symbol, pdf, config.ema_fast)
+    ema_slow = IndicatorCalculator.ema(symbol, pdf, config.ema_slow)
+    macd = IndicatorCalculator.macd(symbol, pdf)
+    adx  = IndicatorCalculator.adx(symbol, pdf, 14)
+    atr  = IndicatorCalculator.atr(symbol, pdf, 14)
+    vwap = IndicatorCalculator.vwap(symbol, pdf)
+    orb  = IndicatorCalculator.orb(symbol, pdf, N=config.orb_minutes)
 
-    # Opening Range High/Low (first N mins)
-    first_rows = pdf.iloc[:config.orb_minutes]
-    orb_high, orb_low = first_rows["high"].max(), first_rows["low"].min()
+    orb_high = orb[symbol]["high"]
+    orb_low = orb[symbol]["low"]
 
     signals = []
     for i in range(len(pdf)):
@@ -44,17 +44,17 @@ def run_strategy(df: pl.DataFrame, config: StrategyConfig):
 
         # BUY setup
         if (
-            row["close"] > row["EMA_FAST"] > row["EMA_SLOW"]  # trend up
-            and row["RSI"] > config.rsi_buy                  # momentum
-            and row["close"] > orb_high                      # breakout
+            row["close"] > ema_fast[symbol] > ema_slow[symbol]  # trend up
+            and rsi[symbol] > config.rsi_buy                   # momentum
+            and row["close"] > orb_high                        # breakout
         ):
             signal = "BUY"
 
         # SELL setup
         elif (
-            row["close"] < row["EMA_FAST"] < row["EMA_SLOW"]  # trend down
-            and row["RSI"] < config.rsi_sell                  # momentum
-            and row["close"] < orb_low                        # breakdown
+            row["close"] < ema_fast[symbol] < ema_slow[symbol]  # trend down
+            and rsi[symbol] < config.rsi_sell                  # momentum
+            and row["close"] < orb_low                         # breakdown
         ):
             signal = "SELL"
 
@@ -63,6 +63,6 @@ def run_strategy(df: pl.DataFrame, config: StrategyConfig):
     pdf["Signal"] = signals
 
     # Only keep timestamp + signal
-    pdf = pdf[["datetime", "Signal"]].dropna()
+    pdf = pdf[["date", "Signal"]].dropna()
 
-    return pl.from_pandas(pdf)
+    return pdf
