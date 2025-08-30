@@ -141,16 +141,16 @@ class ZerodhaClient:
                 close_price = ohlc.get('close')
                 volume = tick.get('volume_traded', 0)
 
-            # store in dict
-            self.market_data[symbol] = {
-                "Token": token,
-                "LTP": ltp,
-                "O": open_price,
-                "H": high_price,
-                "L": low_price,
-                "C": close_price,
-                "Volume": volume
-            }
+                # store in dict
+                self.market_data[symbol] = {
+                    "Token": token,
+                    "LTP": ltp,
+                    "O": open_price,
+                    "H": high_price,
+                    "L": low_price,
+                    "C": close_price,
+                    "Volume": volume
+                }
 
             # optional: print only updated row
             #print(f"{symbol}: {self.market_data[symbol]}")
@@ -193,8 +193,8 @@ class ZerodhaClient:
 # -------------------------
 if __name__ == "__main__":
     client = ZerodhaClient()
-    quote = client.get_live_quote("INFY")
-    print("Live Quote:", quote)
+    # quote = client.get_live_quote("INFY")
+    # print("Live Quote:", quote)
     # client.start_live_data(["INFY", "TCS"])
 
 

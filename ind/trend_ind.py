@@ -1,4 +1,5 @@
 import polars as pl
+from polars import col, lit
 import numpy as np
 from numba import njit
 
@@ -8,36 +9,57 @@ from numba import njit
 def sma(df: pl.DataFrame, period: int, col: str = "close") -> pl.Series:
     return df.select(pl.col(col).rolling_mean(period)).to_series()
 
-def ema(df: pl.DataFrame, period: int, col: str = "close") -> pl.Series:
-    return df.select(pl.col(col).ewm_mean(span=period)).to_series()
 
-# =========================
-# RSI (Relative Strength Index)
-# =========================
-def rsi(df: pl.DataFrame, period: int = 14, col: str = "close") -> pl.Series:
-    close = df[col].to_numpy()
-    delta = np.diff(close, prepend=close[0])
-    up = np.where(delta > 0, delta, 0)
-    down = np.where(delta < 0, -delta, 0)
 
-    roll_up = np.convolve(up, np.ones(period), 'full')[:len(up)] / period
-    roll_down = np.convolve(down, np.ones(period), 'full')[:len(down)] / period
+# EMA
+def ema(df: pl.DataFrame, period: int = 14, col: str = "close") -> pl.Series:
+    """Exponential Moving Average."""
+    alpha = 2 / (period + 1)
+    ema_list = []
+    for i, val in enumerate(df[col]):
+        if i == 0:
+            ema_list.append(val)
+        else:
+            ema_list.append(alpha * val + (1 - alpha) * ema_list[-1])
+    return pl.Series(name=f"EMA_{period}", values=ema_list)
 
-    rs = roll_up / (roll_down + 1e-10)
-    rsi_vals = 100 - (100 / (1 + rs))
+# RSI
 
-    return pl.Series(rsi_vals)
+def rsi(df, period=14):
+    """
+    Compute RSI using Polars DataFrame.
+    df: polars DataFrame with a 'close' column
+    period: RSI period
+    Returns: pl.Series with RSI values
+    """
 
-# =========================
+    # Compute everything within a single select statement for efficiency
+    rs_df = df.select(
+        # Calculate gains: the positive difference
+        pl.col("close").diff(1).clip_min(0).rolling_mean(window_size=period).alias("avg_gain"),
+        
+        # Calculate losses: the negative difference, made positive
+        (pl.col("close").diff(1) * -1).clip_min(0).rolling_mean(window_size=period).alias("avg_loss")
+    )
+
+    # Compute Relative Strength (RS) from the new DataFrame columns
+    rs_series = rs_df.select(
+        (pl.col("avg_gain") / pl.col("avg_loss")).alias("rs")
+    ).to_series()
+
+    # Compute RSI
+    rsi_series = 100 - (100 / (1 + rs_series))
+
+    return rsi_series
 # MACD
-# =========================
 def macd(df: pl.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9, col: str = "close"):
     fast_ema = ema(df, fast, col)
     slow_ema = ema(df, slow, col)
     macd_line = fast_ema - slow_ema
-    signal_line = macd_line.ewm_mean(span=signal)
+    signal_line = ema(pl.DataFrame({"close": macd_line}), signal, "close")
     hist = macd_line - signal_line
     return macd_line, signal_line, hist
+
 
 # =========================
 # Bollinger Bands

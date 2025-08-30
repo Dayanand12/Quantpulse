@@ -45,6 +45,25 @@ def fetch_historical(config_file="config.yaml", stocks_file="stocks.json", outpu
 
     return hist
 
+def fetch_historical_ind(config_file="config.yaml", stocks_file="stocks.json", output_dir="historical_data"):
+    config = load_config(config_file)
+    stocks = load_stocks(stocks_file)
+
+    client = init_client(config_file)[0]
+    data_manager = DataManager(client, config)
+
+    print("📥 Fetching historical data...")
+    hist = data_manager.fetch_historical_ind(stocks)
+
+    os.makedirs(output_dir, exist_ok=True)
+    for symbol, data in hist.items():
+        if data:
+            df = pd.DataFrame(data)
+            file_path = f"{output_dir}/{symbol}_historical.csv"
+            df.to_csv(file_path, index=False)
+            print(f"✅ Saved {symbol} data to {file_path}")
+
+    return hist
 
 # -------------------------
 # Start Live Data
