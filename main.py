@@ -18,9 +18,14 @@ config = StrategyConfig(
     ema_fast=20,
     ema_slow=50,
     rsi_period=14,
-    rsi_buy=30,
-    rsi_sell=70,
-    orb_minutes=15
+    rsi_buy=55.0,   # adjusted for proper momentum entry
+    rsi_sell=45.0,  # adjusted for proper momentum entry
+    orb_minutes=15,
+    adx_filter=20.0,
+    atr_filter=0.008,
+    sl_atr=1.5,
+    tp_atr=2.0,
+    gap_filter=0.01
 )
 
 
@@ -57,6 +62,7 @@ if __name__ == "__main__":
                     vwap = IndicatorCalculator.vwap(symbol, df)
                     orb  = IndicatorCalculator.orb(symbol, df, N=15)
                     signals = run_strategy(df, symbol, config)
+                    #print(rsi,ema,macd,adx,atr,vwap,orb)
                     
 
 

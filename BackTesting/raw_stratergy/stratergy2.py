@@ -130,3 +130,4 @@ def run_strategy(df: pl.DataFrame, symbol: str, config: StrategyConfig):
     pdf = pdf[["date", "Signal"]].dropna()
 
     return pdf
+

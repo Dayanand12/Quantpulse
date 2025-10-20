@@ -1,0 +1,335 @@
+content = """### backtest_runner.py ###
+# backtest_runner.py
+import pandas as pd
+from strategy import on_tick
+from data_handler import reset_data
+from config import symbol
+
+def run_backtest(csv_file):
+    reset_data()
+    data = pd.read_csv(csv_file)
+    # Convert 'timestamp' column to datetime objects here
+    if 'timestamp' in data.columns:  # Add a check for the column
+        data['timestamp'] = pd.to_datetime(data['timestamp'])
+    else:
+        print("Error: 'timestamp' column not found in CSV file.")
+        return
+
+    for _, row in data.iterrows():
+        tick = {
+            'timestamp': row['timestamp'],
+            'open': row['open'],
+            'high': row['high'],
+            'low': row['low'],
+            'close': row['close'],
+            'volume': row['volume'],
+            'oi': row['oi'] if 'oi' in row else None
+        }
+        on_tick(tick)
+
+    print(f"Backtest Completed for {symbol}")
+
+### broker_api.py ###
+# Mocked broker API for backtesting
+def place_order(symbol, qty, order_type):
+    print(f"Mock Order: {order_type} {qty} of {symbol} placed.")
+
+def get_live_ticks(symbol, callback):
+    # For backtest mode, this function is unnecessary, but you could add mock data here if needed
+    pass
+
+### config.py ###
+# config.py
+
+# Mode
+mode = 'backtest'  # 'backtest' or 'live'
+
+# Time Window
+opening_start = '09:15'
+opening_end = '09:30'
+exit_time = '15:15'  # Time to close all trades (EOD exit)
+
+# Symbols
+symbol = 'BANKNIFTY23APR-FUT'
+option_symbol = 'BANKNIFTY23APR45000CE'
+
+# Trade Settings
+order_qty = 15
+max_trades = 3
+
+# Risk Management
+risk_per_trade = 1000  # INR
+reward_to_risk = 2.0   # Reward:Risk ratio (e.g., 1:2)
+trailing_trigger_rr = 1.2  # Start trailing after reaching 1.2R
+
+### data_handler.py ###
+# data_handler.py
+import pandas as pd
+
+# Initialize the DataFrame with correct column names, including 'timestamp'
+data = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+# Function to append tick data
+def append_tick(tick):
+    global data
+
+    # Ensure the tick dictionary matches the order of columns in the data DataFrame
+    new_row = {
+        'timestamp': tick['timestamp'],
+        'open': tick['open'],
+        'high': tick['high'],
+        'low': tick['low'],
+        'close': tick['close'],
+        'volume': tick['volume']
+    }
+
+    # Append the new row to the data DataFrame using pd.concat
+    new_row_df = pd.DataFrame([new_row])
+    data = pd.concat([data, new_row_df], ignore_index=True)
+
+# Function to get the current data
+def get_data():
+    return data
+
+# Function to reset the data (useful for backtesting or resetting for new sessions)
+def reset_data():
+    global data
+    data = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    print("Data reset to initial state.")
+
+### indicators.py ###
+# indicators.py
+def calculate_vwap(df):
+    q = df['volume']
+    p = (df['high'] + df['low'] + df['close']) / 3
+    return (p * q).cumsum() / q.cumsum()
+
+### logger.py ###
+#logger.py
+import datetime
+log_file = "trade_log.txt"
+structured_log_file = "structured_log.txt"
+
+def get_daily_log_file():
+    today_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    return f"trade_log_{today_date}.txt"
+
+def log_event(message):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_file = get_daily_log_file()
+    print(f"Logging to file: {log_file}")  # Debugging print
+    with open(log_file, "a") as file:
+        file.write(f"[{timestamp}] {message}\n")
+
+def log_structured(trade_time, action, entry_price, vwap, profit, balance, trade_no):
+    log_file = get_daily_log_file()
+    print(f"Logging to structured file: {log_file}")  # Debugging print
+    with open(log_file, "a") as file:
+        file.write(
+            f"Time: {trade_time} | Action: {action} | Entry: {entry_price} | VWAP: {vwap} | "
+            f"Profit: {profit} | Current Balance: {balance} | Trade No: {trade_no}\n"
+        )
+
+### main.py ###
+#main.py
+from config import mode, symbol
+
+if mode == 'live':
+    from broker_api import get_live_ticks
+    from strategy import on_tick
+    get_live_ticks(symbol, on_tick)
+
+elif mode == 'backtest':
+    from backtest_runner import run_backtest
+    run_backtest(r"C:\\Trading\\zerodha\\data\\dummy_uptrend_2.csv")
+
+### order_manager.py ###
+# order_manager.py
+
+from broker_api import place_order
+from config import option_symbol, order_qty, risk_per_trade, reward_to_risk, trailing_trigger_rr, exit_time
+from indicators import calculate_vwap
+from logger import log_event
+
+# Trade state
+trade_state = {
+    'active': False,
+    'entry_price': None,
+    'stoploss_price': None,
+    'target_price': None,
+    'trailing_active': False
+}
+
+def execute_buy(entry_price):
+    place_order(symbol=option_symbol, qty=order_qty, order_type='BUY')
+    log_event(f"BUY Order placed for {option_symbol}, Qty: {order_qty}")
+    print("BUY Order Placed")
+    stoploss_points = risk_per_trade / order_qty
+    stoploss_price = entry_price - stoploss_points
+    target_price = entry_price + reward_to_risk * stoploss_points
+    trade_state.update({
+        'active': True,
+        'entry_price': entry_price,
+        'stoploss_price': stoploss_price,
+        'target_price': target_price,
+        'trailing_active': False
+    })
+
+def execute_exit(reason, price):
+    place_order(symbol=option_symbol, qty=order_qty, order_type='SELL')
+    log_event(f"SELL Order placed for {option_symbol}, Qty: {order_qty} | Reason: {reason} | Exit Price: {price}")
+    print(f"SELL Order Placed - Reason: {reason}")
+    entry_price = trade_state['entry_price']
+    pnl = (price - entry_price) * order_qty
+    trade_time = pd.Timestamp.now()
+    update_pnl(pnl, trade_time=trade_time, entry_price=entry_price, latest_vwap=None)
+    reset_trade_state()
+
+def reset_trade_state():
+    trade_state.update({
+        'active': False,
+        'entry_price': None,
+        'stoploss_price': None,
+        'target_price': None,
+        'trailing_active': False
+    })
+
+def is_trade_active():
+    return trade_state['active']
+
+def check_exit_conditions(tick, data):
+    if not trade_state['active']:
+        return
+    current_price = tick['last_price']
+    timestamp = tick['timestamp']
+    if current_price <= trade_state['stoploss_price']:
+        execute_exit(reason="Stop-loss hit", price=current_price)
+        return
+    if current_price >= trade_state['target_price'] and not trade_state['trailing_active']:
+        trade_state['trailing_active'] = True
+        log_event(f"Target reached at {current_price}, trailing SL activated.")
+    if trade_state['trailing_active']:
+        data['vwap'] = calculate_vwap(data)
+        if not data['vwap'].empty:
+            trailing_sl = data['vwap'].iloc[-1]
+            if current_price < trailing_sl:
+                execute_exit(reason="Trailing SL (VWAP) hit", price=current_price)
+                return
+    if timestamp.strftime('%H:%M') >= exit_time:
+        execute_exit(reason="Time-based exit", price=current_price)
+
+### risk_manager.py ###
+from config import max_trades
+from logger import log_event, log_structured
+
+trade_count = 0
+current_balance = 100000
+profit_loss = 0
+
+def can_trade():
+    global trade_count
+    return trade_count < max_trades
+
+def register_trade():
+    global trade_count
+    trade_count += 1
+
+def update_pnl(profit, trade_time=None, entry_price=None, latest_vwap=None):
+    global current_balance, profit_loss, trade_count
+    profit_loss += profit
+    current_balance += profit
+    log_event(f"Profit/Loss updated: {profit}, Current Balance: {current_balance}")
+    if trade_time:
+        log_structured(
+            trade_time=trade_time,
+            action="BUY",
+            entry_price=entry_price,
+            vwap=latest_vwap,
+            profit=profit,
+            balance=current_balance,
+            trade_no=trade_count
+        )
+
+def get_balance():
+    return current_balance
+
+def get_pnl():
+    return profit_loss
+
+### strategy.py ###
+from config import opening_start, opening_end
+from data_handler import append_tick, get_data
+from indicators import calculate_vwap
+from order_manager import execute_buy, check_exit_conditions
+from risk_manager import can_trade, register_trade, update_pnl
+from logger import log_event
+import pandas as pd
+
+def on_tick(tick):
+    append_tick(tick)
+    data = get_data()
+    current_time = tick['timestamp']
+    if current_time.strftime('%H:%M:%S') >= opening_end + ':00':
+        if not data.empty:
+            first_date = data['timestamp'].iloc[0].date()
+            start_datetime = pd.to_datetime(f"{first_date} {opening_start}:00")
+            end_datetime = pd.to_datetime(f"{first_date} {opening_end}:00")
+            opening_range = data[(data['timestamp'] >= start_datetime) & (data['timestamp'] <= end_datetime)]
+            if not opening_range.empty:
+                high = opening_range['high'].max()
+                latest_close = data['close'].iloc[-1]
+                data['vwap'] = calculate_vwap(data)
+                if not data['vwap'].empty:
+                    latest_vwap = data['vwap'].iloc[-1]
+                    avg_vol = data['volume'].tail(5).mean()
+                    if latest_close > high and latest_close > latest_vwap:
+                        if not pd.isna(avg_vol) and tick['volume'] > 1.5 * avg_vol:
+                            if can_trade():
+                                execute_buy(entry_price=latest_close)
+                                register_trade()
+                                log_event(f"Trade executed at {current_time} | Close: {latest_close} | VWAP: {latest_vwap}")
+                    else:
+                        log_event(f"[{current_time}] No buy signal found (Close ≤ High or VWAP).")
+                else:
+                    log_event(f"[{current_time}] VWAP could not be calculated (insufficient data).")
+            else:
+                log_event(f"[{current_time}] Opening range data is empty.")
+    check_exit_conditions(tick, data)
+
+### utils.py ###
+import datetime
+
+def get_daily_log_file():
+    today_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    return f"trade_log_{today_date}.txt"
+
+def log_event(message):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_file = get_daily_log_file()
+    print(f"Logging to file: {log_file}")
+    with open(log_file, "a") as file:
+        file.write(f"[{timestamp}] {message}\n")
+    print("Log event added successfully.")
+
+def test_file_creation():
+    try:
+        test_file = 'test_log.txt'
+        with open(test_file, 'w') as file:
+            file.write("Testing file creation\n")
+        print(f"Test file '{test_file}' created successfully.")
+        log_event("Testing event log entry.")
+        print("Event logged successfully.")
+        return True
+    except Exception as e:
+        print(f"Error: {e}")
+        return False
+
+if __name__ == "__main__":
+    success = test_file_creation()
+    if success:
+        print("Test completed successfully!")
+    else:
+        print("Test failed. Check error details.")
+"""
+
+with open("backtest_module_bundle.txt", "w", encoding="utf-8")

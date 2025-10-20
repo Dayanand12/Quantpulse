@@ -1,12 +1,12 @@
 zerodha:
-  api_key: "1bfpnkeo1p80nft7"
-  api_secret: "79f7qex01cj53h3l0a1rtj78t3di2uu7"
+  api_key: "ttu1u7gc87m4g52f"
+  api_secret: "zo3h4eyxzg8axlbettiaqamf1kpv1gy7"
   access_token: "" 
 
 settings:
   #exchange: "MCX"
   exchange: "NSE"
   interval: "15minute"
-  from_date: "2025-08-20"
-  to_date: "2025-08-28"
+  from_date: "2024-01-01"
+  to_date: "2025-09-05"
 

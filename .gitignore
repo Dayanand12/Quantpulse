@@ -21,3 +21,6 @@ rad.json
 #Test results file
 TestResults.xml
 .env
+historical_data
+fut_data_new
+fut_data

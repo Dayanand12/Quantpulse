@@ -84,3 +84,40 @@ def start_live(config_file="config.yaml", stocks_file="stocks.json"):
 
     # Return the client so main can access market_data
     return client
+
+def initialize_trading_environment(
+    config_file: str = "config.yaml",
+    json_file: str = "stocks.json"
+):
+    """
+    Initialize the trading environment.
+    
+    Args:
+        config_file (str): Path to YAML configuration file.
+        json_file (str): Path to JSON file (can be any file like stocks.json, instruments.json, etc.)
+    
+    Returns:
+        tuple: (client, config, json_data, data_manager)
+    """
+    # --- Load configuration ---
+    config = load_config(config_file)
+
+    # --- Load JSON data (stocks, instruments, etc.) ---
+    import json
+    with open(json_file, "r") as f:
+        json_data = json.load(f)
+
+    # --- Initialize Zerodha client ---
+    exchange = config["settings"]["exchange"]
+    client = ZerodhaClient(
+        exchange=exchange,
+        api_key=config["zerodha"]["api_key"],
+        api_secret=config["zerodha"]["api_secret"],
+        access_token=None  # auto-generate if missing
+    )
+
+    # --- Initialize DataManager ---
+    data_manager = DataManager(client, config)
+
+    return client, config, json_data, data_manager
+
