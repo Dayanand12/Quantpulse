@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-4">Live Stock Selection (Auto 3-Stage Filter)</h1>
+
+<!-- Strategy Selection -->
+<div class="bg-gray-800 p-5 rounded-lg mb-6">
+    <label class="block text-lg mb-2">Choose Strategy</label>
+    <select id="strategy-select"
+            class="p-2 bg-gray-900 border border-gray-700 rounded text-white w-64">
+        <option value="">Select Strategy</option>
+        <option value="ORB">ORB Strategy</option>
+        <option value="VWAP">VWAP Strategy</option>
+        <option value="Breakout">Breakout Strategy</option>
+    </select>
+</div>
+
+<!-- Stage Results -->
+<div class="grid grid-cols-3 gap-4">
+
+    <!-- Stage 1 -->
+    <div class="bg-gray-800 p-5 rounded-lg">
+        <h2 class="text-xl font-semibold mb-3">Stage 1 Filtering</h2>
+
+        <p id="stage1-status" class="text-sm text-gray-400 mb-3">
+            Waiting for backend…
+        </p>
+
+        <h3 class="text-lg mt-4 mb-2">Stage 1 Stocks</h3>
+
+        <ul id="stage1-list" class="bg-gray-900 p-3 rounded h-48 overflow-auto">
+            <li class="text-gray-500">Waiting for results…</li>
+        </ul>
+    </div>
+
+    <!-- Stage 2 -->
+    <div class="bg-gray-800 p-5 rounded-lg">
+        <h2 class="text-xl font-semibold mb-3">Stage 2 Filtering</h2>
+
+        <p id="stage2-status" class="text-sm text-gray-400 mb-3">
+            Waiting for Stage 1…
+        </p>
+
+        <h3 class="text-lg mt-4 mb-2">Stage 2 Stocks</h3>
+
+        <ul id="stage2-list" class="bg-gray-900 p-3 rounded h-48 overflow-auto">
+            <li class="text-gray-500">Waiting…</li>
+        </ul>
+    </div>
+
+    <!-- Stage 3 -->
+    <div class="bg-gray-800 p-5 rounded-lg">
+        <h2 class="text-xl font-semibold mb-3">Stage 3 Filtering</h2>
+
+        <p id="stage3-status" class="text-sm text-gray-400 mb-3">
+            Waiting for Stage 2…
+        </p>
+
+        <h3 class="text-lg mt-4 mb-2">Final Approved Stocks</h3>
+
+        <ul id="stage3-list" class="bg-gray-900 p-3 rounded h-48 overflow-auto">
+            <li class="text-gray-500">Waiting…</li>
+        </ul>
+    </div>
+
+</div>
+
+<script>
+    // Auto-refresh every 3 seconds
+    setInterval(() => {
+        const strategy = document.getElementById("strategy-select").value;
+        if (!strategy) return;
+
+        fetch(`/api/stage-results?strategy=${strategy}`)
+            .then(res => res.json())
+            .then(data => {
+                // Stage 1
+                document.getElementById("stage1-status").innerText = data.stage1.status;
+                document.getElementById("stage1-list").innerHTML =
+                    data.stage1.stocks.map(s => `<li>${s}</li>`).join("");
+
+                // Stage 2
+                document.getElementById("stage2-status").innerText = data.stage2.status;
+                document.getElementById("stage2-list").innerHTML =
+                    data.stage2.stocks.map(s => `<li>${s}</li>`).join("");
+
+                // Stage 3
+                document.getElementById("stage3-status").innerText = data.stage3.status;
+                document.getElementById("stage3-list").innerHTML =
+                    data.stage3.stocks.map(s => `<li>${s}</li>`).join("");
+            });
+    }, 3000);
+</script>
+
+{% endblock %}

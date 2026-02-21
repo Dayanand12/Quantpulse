@@ -1,0 +1,16 @@
+stocks:
+  - RELIANCE
+  - HDFCBANK
+  - TCS
+  - ICICIBANK
+
+stages:
+  stage1:
+    - condition: "open > prev_high"
+    - condition: "volume > 150000"
+
+  stage2:
+    - condition: "ltp > vwap"
+
+  stage3:
+    - condition: "rsi < 70"

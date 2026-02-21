@@ -1,0 +1,15 @@
+stocks:
+  - RELIANCE
+  - INFY
+  - LT
+  - SBIN
+
+stages:
+  stage1:
+    - condition: "ltp > vwap"
+
+  stage2:
+    - condition: "volume_ratio > 2"
+
+  stage3:
+    - condition: "atr > 5"

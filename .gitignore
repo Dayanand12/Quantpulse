@@ -24,3 +24,13 @@ TestResults.xml
 historical_data
 fut_data_new
 fut_data
+echo "" >> .gitignore
+echo "# Python + ML Auto-Generated Files" >> .gitignore
+echo "__pycache__/" >> .gitignore
+echo "*.pyc" >> .gitignore
+echo "*.pyo" >> .gitignore
+echo "*.pyd" >> .gitignore
+echo "*.csv" >> .gitignore
+echo "*.log" >> .gitignore
+echo "*.json" >> .gitignore
+echo "*.ipynb_checkpoints" >> .gitignore

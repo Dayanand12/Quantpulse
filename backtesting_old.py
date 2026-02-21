@@ -18,7 +18,7 @@ client, _, stocks, data_manager = initialize_trading_environment(
 df = fetch_data(
     client,
     symbol=symbol,
-    interval="30minute",
+    interval="5minute",
     output_dir="fut_data"
 )
 # Example: Load data from CSV (replace with your live data source)

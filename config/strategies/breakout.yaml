@@ -1,0 +1,14 @@
+stocks:
+  - TATASTEEL
+  - ADANIENT
+  - MARUTI
+
+stages:
+  stage1:
+    - condition: "ltp > day_high"
+
+  stage2:
+    - condition: "volume > avg20"
+
+  stage3:
+    - condition: "macd > signal"

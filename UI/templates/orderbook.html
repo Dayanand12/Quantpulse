@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-4">Orderbook</h1>
+
+<div class="bg-gray-800 p-4 rounded-lg">
+    <table class="w-full text-left">
+        <thead>
+            <tr class="text-gray-300">
+                <th>Price</th>
+                <th>Bid Qty</th>
+                <th>Ask Qty</th>
+            </tr>
+        </thead>
+        <tbody id="orderbook-table">
+            <tr>
+                <td>Loading…</td>
+                <td></td>
+                <td></td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+{% endblock %}
