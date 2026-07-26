@@ -1,95 +1,135 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Professional ORB Screener</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #0e0e0e;
+            color: white;
+            padding: 20px;
+        }
 
-{% block content %}
-<h1 class="text-2xl font-bold mb-4">Live Stock Selection (Auto 3-Stage Filter)</h1>
+        h2 {
+            margin-bottom: 20px;
+        }
 
-<!-- Strategy Selection -->
-<div class="bg-gray-800 p-5 rounded-lg mb-6">
-    <label class="block text-lg mb-2">Choose Strategy</label>
-    <select id="strategy-select"
-            class="p-2 bg-gray-900 border border-gray-700 rounded text-white w-64">
-        <option value="">Select Strategy</option>
-        <option value="ORB">ORB Strategy</option>
-        <option value="VWAP">VWAP Strategy</option>
-        <option value="Breakout">Breakout Strategy</option>
-    </select>
-</div>
+        /* ===== BACK BUTTON ===== */
+        .back-btn {
+            background-color: #1f1f1f;
+            color: white;
+            border: 1px solid #333;
+            padding: 8px 14px;
+            margin-bottom: 20px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
 
-<!-- Stage Results -->
-<div class="grid grid-cols-3 gap-4">
+        .back-btn:hover {
+            background-color: #333;
+        }
 
-    <!-- Stage 1 -->
-    <div class="bg-gray-800 p-5 rounded-lg">
-        <h2 class="text-xl font-semibold mb-3">Stage 1 Filtering</h2>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
 
-        <p id="stage1-status" class="text-sm text-gray-400 mb-3">
-            Waiting for backend…
-        </p>
+        th, td {
+            padding: 10px;
+            text-align: center;
+            border-bottom: 1px solid #222;
+        }
 
-        <h3 class="text-lg mt-4 mb-2">Stage 1 Stocks</h3>
+        th {
+            background-color: #1a1a1a;
+        }
 
-        <ul id="stage1-list" class="bg-gray-900 p-3 rounded h-48 overflow-auto">
-            <li class="text-gray-500">Waiting for results…</li>
-        </ul>
-    </div>
+        tr:hover {
+            background-color: #1f1f1f;
+        }
 
-    <!-- Stage 2 -->
-    <div class="bg-gray-800 p-5 rounded-lg">
-        <h2 class="text-xl font-semibold mb-3">Stage 2 Filtering</h2>
+        .stage1 { color: #f1c40f; }
+        .stage2 { color: #e67e22; }
+        .stage3 { color: #e74c3c; font-weight: bold; }
 
-        <p id="stage2-status" class="text-sm text-gray-400 mb-3">
-            Waiting for Stage 1…
-        </p>
+        .positive { color: #2ecc71; }
+        .negative { color: #e74c3c; }
+    </style>
+</head>
+<body>
 
-        <h3 class="text-lg mt-4 mb-2">Stage 2 Stocks</h3>
+<!-- ✅ BACK BUTTON -->
+<button onclick="goBack()" class="back-btn">⬅ Back</button>
 
-        <ul id="stage2-list" class="bg-gray-900 p-3 rounded h-48 overflow-auto">
-            <li class="text-gray-500">Waiting…</li>
-        </ul>
-    </div>
+<h2>📊 Live ORB Professional Screener</h2>
 
-    <!-- Stage 3 -->
-    <div class="bg-gray-800 p-5 rounded-lg">
-        <h2 class="text-xl font-semibold mb-3">Stage 3 Filtering</h2>
-
-        <p id="stage3-status" class="text-sm text-gray-400 mb-3">
-            Waiting for Stage 2…
-        </p>
-
-        <h3 class="text-lg mt-4 mb-2">Final Approved Stocks</h3>
-
-        <ul id="stage3-list" class="bg-gray-900 p-3 rounded h-48 overflow-auto">
-            <li class="text-gray-500">Waiting…</li>
-        </ul>
-    </div>
-
-</div>
+<table>
+    <thead>
+        <tr>
+            <th>Symbol</th>
+            <th>Stage</th>
+            <th>LTP</th>
+            <th>VWAP</th>
+            <th>RSI</th>
+            <th>Volume Ratio</th>
+            <th>ATR %</th>
+            <th>OR Low</th>
+            <th>Dist % to OR</th>
+        </tr>
+    </thead>
+    <tbody id="screener-body"></tbody>
+</table>
 
 <script>
-    // Auto-refresh every 3 seconds
-    setInterval(() => {
-        const strategy = document.getElementById("strategy-select").value;
-        if (!strategy) return;
+function goBack() {
+    window.location.href = "/";
+}
 
-        fetch(`/api/stage-results?strategy=${strategy}`)
-            .then(res => res.json())
-            .then(data => {
-                // Stage 1
-                document.getElementById("stage1-status").innerText = data.stage1.status;
-                document.getElementById("stage1-list").innerHTML =
-                    data.stage1.stocks.map(s => `<li>${s}</li>`).join("");
+async function fetchScreener() {
 
-                // Stage 2
-                document.getElementById("stage2-status").innerText = data.stage2.status;
-                document.getElementById("stage2-list").innerHTML =
-                    data.stage2.stocks.map(s => `<li>${s}</li>`).join("");
+    const res = await fetch("/api/screener-live");
+    const data = await res.json();
 
-                // Stage 3
-                document.getElementById("stage3-status").innerText = data.stage3.status;
-                document.getElementById("stage3-list").innerHTML =
-                    data.stage3.stocks.map(s => `<li>${s}</li>`).join("");
-            });
-    }, 3000);
+    const tbody = document.getElementById("screener-body");
+    tbody.innerHTML = "";
+
+    data.forEach(stock => {
+
+        let stageClass = "";
+        if (stock.stage === "Stage 1") stageClass = "stage1";
+        if (stock.stage === "Stage 2") stageClass = "stage2";
+        if (stock.stage === "Stage 3") stageClass = "stage3";
+
+        let distClass = "";
+        if (stock.distance_to_or_low !== null) {
+            distClass = stock.distance_to_or_low <= 0.2 ? "negative" : "positive";
+        }
+
+        const row = `
+            <tr class="${stageClass}">
+                <td>${stock.symbol}</td>
+                <td>${stock.stage}</td>
+                <td>${stock.ltp ? stock.ltp.toFixed(2) : "-"}</td>
+                <td>${stock.vwap ? stock.vwap.toFixed(2) : "-"}</td>
+                <td>${stock.rsi ? stock.rsi.toFixed(2) : "-"}</td>
+                <td>${stock.volume_ratio ? stock.volume_ratio.toFixed(2) : "-"}</td>
+                <td>${stock.atr_pct ? stock.atr_pct.toFixed(2) : "-"}</td>
+                <td>${stock.orb_low ? stock.orb_low.toFixed(2) : "-"}</td>
+                <td class="${distClass}">
+                    ${stock.distance_to_or_low !== null 
+                        ? stock.distance_to_or_low.toFixed(3) + "%"
+                        : "-"}
+                </td>
+            </tr>
+        `;
+
+        tbody.innerHTML += row;
+    });
+}
+
+setInterval(fetchScreener, 3000);
+fetchScreener();
 </script>
 
-{% endblock %}
+</body>
+</html>

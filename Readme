@@ -1,0 +1,9 @@
+cd C:\Trading\QuantPulse\
+
+
+
+venv\Scripts\activate
+
+cd C:\Users\Dayanand\OneDrive\Desktop\market\Quantpulse\
+
+python run_live.py

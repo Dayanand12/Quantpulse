@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<h1 class="text-2xl font-bold mb-4">Live Paper Trading</h1>
+
+<div class="grid grid-cols-3 gap-4">
+
+    <!-- Available Capital -->
+    <div class="bg-gray-800 p-6 rounded-lg shadow">
+        <h3 class="text-lg mb-2">Available Capital</h3>
+        <p id="capital" class="text-3xl text-green-400 font-bold">Loading...</p>
+    </div>
+
+    <!-- Open Positions -->
+    <div class="bg-gray-800 p-6 rounded-lg shadow">
+        <h3 class="text-lg mb-2">Open Positions</h3>
+        <pre id="positions" class="text-sm text-gray-300"></pre>
+    </div>
+
+    <!-- Trade Log -->
+    <div class="bg-gray-800 p-6 rounded-lg shadow">
+        <h3 class="text-lg mb-2">Trade Log</h3>
+        <pre id="trades" class="text-sm text-gray-300"></pre>
+    </div>
+
+</div>
+
+<script>
+async function fetchStatus() {
+    const response = await fetch("/api/live-status");
+    const data = await response.json();
+
+    if (!data) return;
+
+    document.getElementById("capital").innerText =
+        "₹ " + (data.available_capital ?? 0);
+
+    document.getElementById("positions").innerText =
+        JSON.stringify(data.open_positions ?? {}, null, 2);
+
+    document.getElementById("trades").innerText =
+        JSON.stringify(data.trade_log ?? [], null, 2);
+}
+
+setInterval(fetchStatus, 2000);
+fetchStatus();
+</script>
+
+{% endblock %}

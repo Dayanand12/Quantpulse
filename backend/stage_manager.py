@@ -1,19 +1,48 @@
-from backend.utils.market_data import get_live_data
-
-def apply_conditions(stock, conditions):
-    data = get_live_data(stock)
+def apply_conditions(data, conditions):
 
     for c in conditions:
-        expr = c['condition']
+        key = c["key"]
+        operator = c["operator"]
+        value = c["value"]
 
-        try:
-            if not eval(expr, {}, data):
-                return False
-        except Exception:
+        stock_value = data.get(key)
+
+        if stock_value is None:
             return False
+
+        if operator == ">":
+            if not stock_value > value:
+                return False
+        elif operator == "<":
+            if not stock_value < value:
+                return False
+        elif operator == ">=":
+            if not stock_value >= value:
+                return False
+        elif operator == "<=":
+            if not stock_value <= value:
+                return False
+        elif operator == "==":
+            if not stock_value == value:
+                return False
 
     return True
 
 
-def run_stage(stocks, stage_conditions):
-    return [s for s in stocks if apply_conditions(s, stage_conditions)]
+def run_stage(stocks, stage_conditions, snapshot):
+
+    filtered = []
+
+    for s in stocks:
+
+        data = snapshot.get(s)
+
+        if not data:
+            continue
+
+        if apply_conditions(data, stage_conditions):
+            filtered.append({
+                "symbol": s
+            })
+
+    return filtered

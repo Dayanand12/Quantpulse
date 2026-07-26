@@ -1,16 +1,20 @@
 stocks:
-  - RELIANCE
-  - HDFCBANK
-  - TCS
-  - ICICIBANK
+  - NIFTY24FEBFUT
+  - BANKNIFTY24FEBFUT
 
 stages:
+
   stage1:
-    - condition: "open > prev_high"
-    - condition: "volume > 150000"
+    - key: rsi
+      operator: "<"
+      value: 70
 
   stage2:
-    - condition: "ltp > vwap"
+    - key: ema_9
+      operator: ">"
+      value: 0
 
   stage3:
-    - condition: "rsi < 70"
+    - key: adx
+      operator: ">"
+      value: 20
