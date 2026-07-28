@@ -1,71 +1,112 @@
 #run_live.py
+import sys
 import threading
 import time
 
-from Data_ingestion.run_client import initialize_trading_environment
-from engine import TradingEngine
-from backend.filter_engine import start_engine
-from UI.app import create_app
+# Windows consoles default to cp1252, which can't encode the emoji used in
+# print()/logging calls throughout this codebase and crashes on first use.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-CAPITAL = 100000
+import uvicorn
+
+from Data_ingestion.run_client import initialize_trading_environment
+from backend.filter_engine import start_engine
+from core.container import build_container
+from infrastructure.config.settings import get_settings
+from infrastructure.logging.logger import configure_logging, get_logger
+from infrastructure.persistence.migrate import run_migrations
+from live.deployment_runner import run_deployments
+from live.eod_scheduler import run_eod_scheduler
+from server.main import create_app
 
 
 def main():
+    settings = get_settings()
+    configure_logging(settings)
+    logger = get_logger(__name__)
+
+    # -----------------------------
+    # Ensure the SQLite schema is current (watchlist, deployments, ...)
+    # -----------------------------
+    run_migrations()
 
     # -----------------------------
     # Initialize Zerodha + Config
     # -----------------------------
-    client, config, json_data, data_manager = initialize_trading_environment(
-        config_file="Data_ingestion/config.yaml",
-        json_file="Data_ingestion/stocks.json"
+    client, _, _, _ = initialize_trading_environment(
+        config_file=settings.zerodha_config_file,
+        json_file=settings.zerodha_stocks_file,
     )
 
-    symbols = json_data.get("symbols", [])
+    # -----------------------------
+    # Composition root: wire every interface to its concrete adapter.
+    # Symbols now come from the persisted watchlist (seeded from
+    # stocks.json on first run) — see core/container.py::build_container.
+    # -----------------------------
+    container = build_container(settings, client)
 
     # -----------------------------
-    # Start Live Engine
+    # Create FastAPI App (IMPORTANT: before running)
     # -----------------------------
-    engine = TradingEngine()
-    live_engine = engine.start_live(symbols, capital=CAPITAL)
+    app = create_app(container, settings)
 
     # -----------------------------
-    # Create Flask App (IMPORTANT: before running)
-    # -----------------------------
-    app = create_app(live_engine)
-
-    # -----------------------------
-    # Start ORB Screener in Background Thread
+    # Start the market-wide screener funnel display (Screener page / Live
+    # Dashboard) — display-only, independent of deployments.
     # -----------------------------
     threading.Thread(
-        target=lambda: start_engine(live_engine),
-        daemon=True
+        target=lambda: start_engine(container.live_engine),
+        daemon=True,
+    ).start()
+
+    # -----------------------------
+    # Run every deployment's own ExecutionManager
+    # -----------------------------
+    threading.Thread(
+        target=lambda: run_deployments(container.deployment_runtimes),
+        daemon=True,
+    ).start()
+
+    # -----------------------------
+    # End-of-day trades/metrics report (backend/eod_report.py), written
+    # automatically once a day at settings.eod_report_time
+    # -----------------------------
+    threading.Thread(
+        target=lambda: run_eod_scheduler(
+            container.session_factory,
+            container.deployment_repository,
+            settings.eod_report_time,
+            settings.eod_report_dir,
+        ),
+        daemon=True,
     ).start()
 
     # -----------------------------
     # Start Zerodha WebSocket
     # -----------------------------
-    client.start_live_data(symbols, config["settings"]["exchange"])
+    container.market_data_provider.start(container.watchlist_repository.get_symbols())
 
     # -----------------------------
     # Tick Processing Loop (Background Thread)
     # -----------------------------
     def tick_loop():
         while True:
-            for symbol, tick_data in client.market_data.items():
-                if "LTP" in tick_data:
-                    live_engine.process_tick(symbol, tick_data)
+            for symbol, tick in container.market_data_provider.get_latest_ticks().items():
+                container.trading_engine.process_tick(symbol, tick)
             time.sleep(0.5)
 
     threading.Thread(
         target=tick_loop,
-        daemon=True
+        daemon=True,
     ).start()
 
     # -----------------------------
-    # Start Flask Server (ONLY ONCE)
+    # Start FastAPI Server (ONLY ONCE)
     # -----------------------------
-    print("🚀 Starting Flask Server...")
-    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+    logger.info("Starting FastAPI server on %s:%s", settings.api_host, settings.api_port)
+    uvicorn.run(app, host=settings.api_host, port=settings.api_port)
 
 
 if __name__ == "__main__":

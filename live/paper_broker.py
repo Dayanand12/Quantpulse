@@ -1,5 +1,8 @@
 # live/paper_broker.py
 
+from datetime import datetime
+
+
 class PaperBroker:
     def __init__(self, initial_capital=100000):
         self.initial_capital = initial_capital
@@ -29,7 +32,7 @@ class PaperBroker:
         print(f"✅ ENTER {side} {symbol} @ {price}")
         return True
 
-    def exit(self, symbol, price):
+    def exit(self, symbol, price, initial_stop_loss=None):
         if symbol not in self.positions:
             return
 
@@ -49,7 +52,9 @@ class PaperBroker:
             "exit": price,
             "side": pos["side"],
             "qty": pos["qty"],
-            "pnl": pnl
+            "pnl": pnl,
+            "initial_stop_loss": initial_stop_loss,
+            "closed_at": datetime.now(),
         })
 
         print(f"🔁 EXIT {symbol} | PnL: {pnl}")

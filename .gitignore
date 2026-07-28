@@ -39,6 +39,9 @@ historical_data/
 fut_data/
 fut_data_new/
 
+# Generated reports (market-analysis + EOD trades/metrics)
+reports/
+
 # -------------------------
 # Python
 # -------------------------
@@ -75,3 +78,6 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
+
+#config
+config.yaml

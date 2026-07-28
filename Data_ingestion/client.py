@@ -4,6 +4,7 @@ import logging
 import webbrowser
 from threading import Thread
 from flask import Flask, request
+from werkzeug.serving import make_server
 from dotenv import load_dotenv, set_key
 from kiteconnect import KiteConnect, KiteTicker
 
@@ -45,6 +46,7 @@ class ZerodhaClient:
     def _auto_generate_access_token(self):
         """Automatic login using Flask + browser."""
         app = Flask(__name__)
+        result = {}
 
         @app.route("/callback")
         def callback():
@@ -54,7 +56,11 @@ class ZerodhaClient:
 
             # Save access token in .env for reuse
             set_key(ENV_PATH, "ACCESS_TOKEN", access_token)
+            result["token"] = access_token
             print("✅ Login successful, token saved in .env")
+
+            # Stop the callback server so the main app can bind this port.
+            Thread(target=httpd.shutdown, daemon=True).start()
             return "✅ Login successful! You can close this tab now."
 
         # Open login page
@@ -62,25 +68,28 @@ class ZerodhaClient:
         print(f"🌐 Opening browser for login: {login_url}")
         webbrowser.open(login_url)
 
-        # Run Flask server in background
-        server = Thread(target=lambda: app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False))
-        server.daemon = True   # 👈 ensures Flask thread stops when main program exits
+        # Run a shutdown-able Flask server in the background. This listens
+        # on the same port (5000) the main app will use later, so it MUST
+        # be stopped (see callback() above) before this function returns —
+        # otherwise the main server can never bind that port.
+        httpd = make_server("127.0.0.1", 5000, app)
+        server = Thread(target=httpd.serve_forever)
+        server.daemon = True
         server.start()
 
-        # Wait until .env gets ACCESS_TOKEN
         try:
             timeout = 60  # seconds
             start_time = time.time()
 
-            while True:
-                load_dotenv(ENV_PATH, override=True)
-                token = os.getenv("ACCESS_TOKEN")
-                if token:
-                    print("✅ Access token received!")
-                    return token
+            while "token" not in result:
                 if time.time() - start_time > timeout:
+                    httpd.shutdown()
                     raise TimeoutError("❌ Login timed out. Access token not received.")
-                time.sleep(1)
+                time.sleep(0.5)
+
+            server.join(timeout=5)
+            print("✅ Access token received!")
+            return result["token"]
 
         except TimeoutError as e:
             print(e)
@@ -88,6 +97,7 @@ class ZerodhaClient:
             os._exit(0)
 
         except KeyboardInterrupt:
+            httpd.shutdown()
             print("\n❌ Interrupted by user. Exiting...")
             os._exit(0)
 

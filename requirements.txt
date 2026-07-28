@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+websockets
+polars
+TA-Lib
+pandas
+openpyxl
+numpy
+pyyaml
+python-dotenv
+kiteconnect
+flask
+pydantic-settings
+sqlalchemy
+alembic
+pytest

@@ -2,25 +2,28 @@
 
 import datetime as dt
 
+from core.application.interfaces.trading_engine import ITradingEngine
+
+
 class MarketAnalysisEngine:
 
-    def __init__(self, live_engine):
-        self.live_engine = live_engine
+    def __init__(self, trading_engine: ITradingEngine):
+        self.trading_engine = trading_engine
 
     def analyze(self, index_symbol):
 
-        snapshot = self.live_engine.get_snapshot()
+        snapshot = self.trading_engine.get_snapshot()
         data = snapshot.get(index_symbol)
 
         if not data:
             return {"error": "No data yet."}
 
-        ltp = data.get("ltp", 0)
-        ema9 = data.get("ema9", 0)
-        ema21 = data.get("ema21", 0)
-        adx = data.get("adx", 0)
-        vwap = data.get("vwap", 0)
-        atr_pct = data.get("atr_pct", 0)
+        ltp = data.ltp or 0
+        ema9 = data.ema9 or 0
+        ema21 = data.ema21 or 0
+        adx = data.adx or 0
+        vwap = data.vwap or 0
+        atr_pct = data.atr_pct or 0
 
         now_time = dt.datetime.now().strftime("%H:%M:%S")
 

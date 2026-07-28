@@ -44,7 +44,7 @@ class LiveEngine:
     # -----------------------------------
     def process_tick(self, symbol, tick):
 
-        candle = self.builder.process_tick(symbol, tick)
+        candle = self.builder.update_tick(symbol, tick)
 
         if candle:
             self.on_new_candle(symbol, candle)
@@ -112,13 +112,14 @@ class LiveEngine:
         # -----------------------
         # Compute Indicators
         # -----------------------
+        ema5 = IndicatorCalculator.ema(df, period=5)
         ema9 = IndicatorCalculator.ema(df, period=9)
         ema21 = IndicatorCalculator.ema(df, period=21)
         rsi14 = IndicatorCalculator.rsi(df, period=14)
         adx14 = IndicatorCalculator.adx(df, period=14)
         atr14 = IndicatorCalculator.atr(df, period=14)
 
-        df = df.with_columns([ema9, ema21, rsi14, adx14, atr14])
+        df = df.with_columns([ema5, ema9, ema21, rsi14, adx14, atr14])
         latest = df.row(-1, named=True)
 
         # -----------------------
@@ -164,6 +165,7 @@ class LiveEngine:
         # -----------------------
         self.indicator_snapshot[symbol] = {
             "ltp": float(latest["close"]),
+            "ema5": float(latest["EMA_5"]),
             "ema9": float(latest["EMA_9"]),
             "ema21": float(latest["EMA_21"]),
             "rsi": float(latest["RSI_14"]),

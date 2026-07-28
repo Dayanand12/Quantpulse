@@ -1,0 +1,203 @@
+"""Composition root.
+
+The ONE place in the codebase allowed to import concrete infrastructure
+and existing engine classes directly and wire them behind the
+application-layer interfaces. Every other module (API routes, the
+deployment runner, future modules) depends on core.application.interfaces
+— never on the concrete classes constructed here. To swap an
+implementation (e.g. a SQL-backed order repository instead of the
+in-memory PaperBroker adapter, or a live-broker market data provider
+instead of paper), change exactly one line in build_container — nothing
+else in the codebase needs to know.
+"""
+
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List
+
+from sqlalchemy.orm import sessionmaker
+
+from core.application.interfaces.current_user_provider import ICurrentUserProvider
+from core.application.interfaces.deployment_repository import IDeploymentRepository
+from core.application.interfaces.event_bus import IEventBus
+from core.application.interfaces.market_data_provider import IMarketDataProvider
+from core.application.interfaces.notification_service import INotificationService
+from core.application.interfaces.order_repository import IOrderRepository
+from core.application.interfaces.portfolio_service import IPortfolioService
+from core.application.interfaces.risk_engine import IRiskEngine
+from core.application.interfaces.strategy_registry import IStrategyRegistry
+from core.application.interfaces.strategy_source_repository import IStrategySourceRepository
+from core.application.interfaces.trading_engine import ITradingEngine
+from core.application.interfaces.watchlist_repository import IWatchlistRepository
+from core.domain.models import Deployment, StrategyConfig
+
+from infrastructure.auth.single_user_provider import SingleUserProvider
+from infrastructure.config.settings import Settings
+from infrastructure.events.in_process_event_bus import InProcessEventBus
+from infrastructure.notifications.console_notification_service import ConsoleNotificationService
+from infrastructure.persistence.database import create_session_factory
+from infrastructure.persistence.sql_deployment_repository import SqlDeploymentRepository
+from infrastructure.persistence.sql_trade_journal import SqlTradeJournal
+from infrastructure.persistence.sql_watchlist_repository import SqlWatchlistRepository
+from infrastructure.risk.permissive_risk_engine import PermissiveRiskEngine
+from infrastructure.strategies.file_strategy_registry import FileStrategyRegistry
+from infrastructure.strategies.filesystem_strategy_source_repository import (
+    FilesystemStrategySourceRepository,
+)
+from infrastructure.trading.live_engine_adapter import LiveEngineAdapter
+from infrastructure.trading.market_data.zerodha_provider import ZerodhaMarketDataProvider
+from infrastructure.trading.paper_order_repository import PaperOrderRepository
+from infrastructure.trading.paper_portfolio_service import PaperPortfolioService
+
+from live.execution_manager import ExecutionManager
+from live.live_engine import LiveEngine
+from live.paper_broker import PaperBroker
+from Data_ingestion.client import ZerodhaClient
+from Data_ingestion.config_loader import load_stocks
+import strategies as strategies_package
+
+DEFAULT_STRATEGY_NAME = "orb_reversal"
+
+
+@dataclass
+class DeploymentRuntime:
+    """One running strategy instance: its own capital pool (own
+    PaperBroker behind order_repository/portfolio_service), its own
+    ExecutionManager evaluating its own symbol subset with its own
+    strategy and risk/sizing config."""
+
+    deployment: Deployment
+    order_repository: IOrderRepository
+    portfolio_service: IPortfolioService
+    execution_manager: ExecutionManager
+
+
+@dataclass
+class Container:
+    """Everything the API layer and background workers depend on. Always
+    access fields through their interface type — the concrete class behind
+    a field can change without any caller changing.
+    """
+
+    event_bus: IEventBus
+    trading_engine: ITradingEngine
+    market_data_provider: IMarketDataProvider
+    risk_engine: IRiskEngine
+    notification_service: INotificationService
+    current_user_provider: ICurrentUserProvider
+    watchlist_repository: IWatchlistRepository
+    strategy_registry: IStrategyRegistry
+    strategy_source_repository: IStrategySourceRepository
+    deployment_repository: IDeploymentRepository
+    deployment_runtimes: List[DeploymentRuntime]
+
+    # Exposed so anything needing durable trade history (e.g.
+    # backend/eod_report.py) can query the `trades` table directly,
+    # without every caller threading its own session factory through.
+    session_factory: sessionmaker
+
+    # backend/filter_engine.py's display-only screener loop (the Screener
+    # page / Live Dashboard funnel) works directly on LiveEngine's raw dict
+    # snapshot — existing, tested, untouched — so it needs the concrete
+    # engine, not the ITradingEngine interface the API layer uses. Exposed
+    # here as a documented exception rather than routed through a guessed
+    # interface for a single, display-only caller.
+    live_engine: LiveEngine
+
+
+def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Container:
+    """The one function allowed to construct concrete infrastructure."""
+
+    session_factory = create_session_factory(settings.database_url)
+    watchlist_repository: IWatchlistRepository = SqlWatchlistRepository(session_factory)
+    strategy_registry: IStrategyRegistry = FileStrategyRegistry()
+    strategy_source_repository: IStrategySourceRepository = FilesystemStrategySourceRepository(
+        Path(strategies_package.__path__[0])
+    )
+    deployment_repository: IDeploymentRepository = SqlDeploymentRepository(session_factory)
+
+    symbols = watchlist_repository.get_symbols()
+    if not symbols:
+        # First run: nothing saved yet — seed from the legacy stocks.json so
+        # the transition to a persisted watchlist doesn't lose anything.
+        symbols = load_stocks(settings.zerodha_stocks_file)
+        watchlist_repository.save_symbols(symbols)
+
+    deployments = deployment_repository.list_deployments()
+    if not deployments:
+        # First run: seed Deployment 1 from what's been running all along
+        # (the whole watchlist, full capital, tested default risk config)
+        # so this change doesn't reset or stop anything currently working.
+        seed = Deployment(
+            id=uuid.uuid4().hex[:12],
+            strategy_name=DEFAULT_STRATEGY_NAME,
+            symbols=tuple(symbols),
+            capital=settings.initial_capital,
+            config=StrategyConfig(),
+        )
+        deployment_repository.save_deployment(seed)
+        deployments = [seed]
+
+    event_bus = InProcessEventBus()
+    SqlTradeJournal(session_factory, event_bus)
+
+    live_engine = LiveEngine(symbols, capital=settings.initial_capital)
+    trading_engine: ITradingEngine = LiveEngineAdapter(live_engine)
+
+    market_data_provider: IMarketDataProvider = ZerodhaMarketDataProvider(
+        zerodha_client, zerodha_client.exchange
+    )
+
+    notification_service: INotificationService = ConsoleNotificationService(event_bus)
+    risk_engine: IRiskEngine = PermissiveRiskEngine()
+    current_user_provider: ICurrentUserProvider = SingleUserProvider()
+
+    deployment_runtimes: List[DeploymentRuntime] = []
+    for deployment in deployments:
+        if not deployment.enabled:
+            continue
+
+        broker = PaperBroker(deployment.capital)
+        order_repository = PaperOrderRepository(
+            broker, event_bus, deployment.id, deployment.strategy_name
+        )
+        portfolio_service = PaperPortfolioService(broker)
+        strategy = strategy_registry.get_strategy(deployment.strategy_name)
+
+        execution_manager = ExecutionManager(
+            live_engine,
+            order_repository,
+            strategy,
+            list(deployment.symbols),
+            quantity=deployment.config.quantity,
+            stoploss_pct=deployment.config.stoploss_pct,
+            target_pct=deployment.config.target_pct,
+            trailing_pct=deployment.config.trailing_pct,
+            max_cycles_per_day=deployment.config.max_cycles_per_day,
+        )
+
+        deployment_runtimes.append(
+            DeploymentRuntime(
+                deployment=deployment,
+                order_repository=order_repository,
+                portfolio_service=portfolio_service,
+                execution_manager=execution_manager,
+            )
+        )
+
+    return Container(
+        event_bus=event_bus,
+        trading_engine=trading_engine,
+        market_data_provider=market_data_provider,
+        risk_engine=risk_engine,
+        notification_service=notification_service,
+        current_user_provider=current_user_provider,
+        watchlist_repository=watchlist_repository,
+        strategy_registry=strategy_registry,
+        strategy_source_repository=strategy_source_repository,
+        deployment_repository=deployment_repository,
+        deployment_runtimes=deployment_runtimes,
+        live_engine=live_engine,
+        session_factory=session_factory,
+    )
