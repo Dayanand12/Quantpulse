@@ -32,7 +32,22 @@ class ZerodhaClient:
         self.kite = KiteConnect(api_key=self.api_key)
 
         # Initialize market_data dict here
-        self.market_data = {} 
+        self.market_data = {}
+
+        # Instrument dumps are the same all day and expensive to fetch
+        # (thousands of rows) — cache per exchange (plus one entry for the
+        # no-exchange/global lookup) instead of hitting kite.instruments()
+        # on every get_instrument_token() call. Matters most for callers
+        # that look up the same symbol repeatedly (e.g.
+        # backend/market_analysis_engine.py, polled every few seconds).
+        self._instruments_cache = {}
+
+        # A saved access_token from a previous day is almost always expired
+        # (Kite tokens are valid until ~6am the next day) — verify it still
+        # works before trusting it, otherwise re-run the login flow.
+        if self.access_token and not self._is_token_valid(self.access_token):
+            logging.warning("Saved ACCESS_TOKEN is expired/invalid — re-running login.")
+            self.access_token = None
 
         # If access_token not available, trigger login flow
         if not self.access_token:
@@ -42,6 +57,16 @@ class ZerodhaClient:
         self.kite.set_access_token(self.access_token)
         self.kws = KiteTicker(self.api_key, self.access_token)
 
+
+    def _is_token_valid(self, access_token):
+        """Cheap check: a token is only valid if Kite accepts it for a real call."""
+        try:
+            probe = KiteConnect(api_key=self.api_key)
+            probe.set_access_token(access_token)
+            probe.profile()
+            return True
+        except Exception:
+            return False
 
     def _auto_generate_access_token(self):
         """Automatic login using Flask + browser."""
@@ -93,28 +118,35 @@ class ZerodhaClient:
 
         except TimeoutError as e:
             print(e)
-            # Exit or handle as needed
-            os._exit(0)
+            raise
 
         except KeyboardInterrupt:
             httpd.shutdown()
             print("\n❌ Interrupted by user. Exiting...")
-            os._exit(0)
+            raise
 
+
+    def _cached_instruments(self, exchange=None):
+        """exchange=None fetches Kite's global instrument list (needed for
+        indices, which aren't under a single tradeable exchange)."""
+        cache_key = exchange or "__global__"
+        if cache_key not in self._instruments_cache:
+            self._instruments_cache[cache_key] = (
+                self.kite.instruments(exchange) if exchange else self.kite.instruments()
+            )
+        return self._instruments_cache[cache_key]
 
     def get_instrument_token(self, symbol, exchange):
         """Get instrument token for symbol (supports indices like NIFTY 50)."""
         exchange = exchange or self.exchange
 
         # Try normal exchange lookup first (stocks etc.)
-        instruments = self.kite.instruments(exchange)
-        for inst in instruments:
+        for inst in self._cached_instruments(exchange):
             if inst["tradingsymbol"] == symbol:
                 return inst["instrument_token"]
 
         # If not found, try global instrument list (for indices)
-        instruments = self.kite.instruments()
-        for inst in instruments:
+        for inst in self._cached_instruments():
             if inst["tradingsymbol"] == symbol:
                 return inst["instrument_token"]
 

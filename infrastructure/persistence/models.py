@@ -60,3 +60,6 @@ class DeploymentRecord(Base):
     trailing_pct: Mapped[float] = mapped_column(Float)
     max_cycles_per_day: Mapped[int] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    start_time: Mapped[str] = mapped_column(String(5), default="09:20")
+    end_time: Mapped[str] = mapped_column(String(5), default="11:30")
+    timeframe: Mapped[str] = mapped_column(String(10), default="minute")

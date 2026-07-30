@@ -24,6 +24,9 @@ def _to_domain(record: DeploymentRecord) -> Deployment:
             target_pct=record.target_pct,
             trailing_pct=record.trailing_pct,
             max_cycles_per_day=record.max_cycles_per_day,
+            start_time=record.start_time,
+            end_time=record.end_time,
+            timeframe=record.timeframe,
         ),
         enabled=record.enabled,
     )
@@ -57,6 +60,9 @@ class SqlDeploymentRepository(IDeploymentRepository):
             record.trailing_pct = deployment.config.trailing_pct
             record.max_cycles_per_day = deployment.config.max_cycles_per_day
             record.enabled = deployment.enabled
+            record.start_time = deployment.config.start_time
+            record.end_time = deployment.config.end_time
+            record.timeframe = deployment.config.timeframe
             session.merge(record)
 
     def delete_deployment(self, deployment_id: str) -> None:

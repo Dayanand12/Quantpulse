@@ -35,6 +35,7 @@ class ExecutionManager:
         target_pct=2.0,
         trailing_pct=0.1,
         max_cycles_per_day=10,
+        timeframe="minute",
     ):
         self.live_engine = live_engine
         self.order_repository = order_repository
@@ -47,6 +48,7 @@ class ExecutionManager:
         self.target_pct = target_pct
         self.trailing_pct = trailing_pct
         self.max_cycles_per_day = max_cycles_per_day
+        self.timeframe = timeframe
 
         # symbol -> {stop_loss, target, trail_price}
         self.trade_state = {}
@@ -137,7 +139,7 @@ class ExecutionManager:
     def evaluate(self):
         self._reset_if_new_day(dt.date.today())
 
-        snapshot = self.live_engine.get_snapshot()
+        snapshot = self.live_engine.get_snapshot(self.timeframe)
 
         self._manage_exits(snapshot)
         self._manage_entries(snapshot)

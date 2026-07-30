@@ -19,31 +19,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from core.application.interfaces.deployment_repository import IDeploymentRepository
-from core.domain.enums import OrderSide
 from core.domain.metrics import PerformanceMetrics, compute_performance_metrics
 from core.domain.models import Trade
 from infrastructure.persistence.database import unit_of_work
 from infrastructure.persistence.models import TradeRecord
+from infrastructure.persistence.sql_trade_repository import record_to_trade
 
 TRADE_COLUMNS = [
     "Time", "Deployment ID", "Strategy", "Symbol", "Side",
     "Qty", "Entry", "Exit", "PnL", "PnL %", "Initial SL",
 ]
-
-
-def _record_to_trade(record: TradeRecord) -> Trade:
-    return Trade(
-        symbol=record.symbol,
-        side=OrderSide(record.side),
-        quantity=record.quantity,
-        entry_price=record.entry_price,
-        exit_price=record.exit_price,
-        pnl=record.pnl,
-        closed_at=record.closed_at,
-        initial_stop_loss=record.initial_stop_loss,
-        deployment_id=record.deployment_id,
-        strategy_name=record.strategy_name,
-    )
 
 
 def _fetch_trades_for_day(session_factory: sessionmaker, report_date: date) -> List[Trade]:
@@ -56,7 +41,7 @@ def _fetch_trades_for_day(session_factory: sessionmaker, report_date: date) -> L
             .where(TradeRecord.closed_at >= start, TradeRecord.closed_at < end)
             .order_by(TradeRecord.closed_at)
         )
-        return [_record_to_trade(r) for r in records]
+        return [record_to_trade(r) for r in records]
 
 
 def _trade_row(trade: Trade) -> dict:

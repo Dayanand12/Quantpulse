@@ -80,3 +80,43 @@ def test_multiple_deployments_persist_independently(tmp_path):
 
     assert ids == {"dep1", "dep2"}
     assert repo.get_deployment("dep2").symbols == ("INFY", "SBIN")
+
+
+def test_start_end_time_round_trip(tmp_path):
+    repo = make_repo(tmp_path)
+    repo.save_deployment(
+        make_deployment(config=StrategyConfig(start_time="09:15", end_time="10:45"))
+    )
+
+    saved = repo.get_deployment("dep1")
+
+    assert saved.config.start_time == "09:15"
+    assert saved.config.end_time == "10:45"
+
+
+def test_start_end_time_default_when_not_specified(tmp_path):
+    repo = make_repo(tmp_path)
+    repo.save_deployment(make_deployment())
+
+    saved = repo.get_deployment("dep1")
+
+    assert saved.config.start_time == "09:20"
+    assert saved.config.end_time == "11:30"
+
+
+def test_timeframe_round_trip(tmp_path):
+    repo = make_repo(tmp_path)
+    repo.save_deployment(make_deployment(config=StrategyConfig(timeframe="15minute")))
+
+    saved = repo.get_deployment("dep1")
+
+    assert saved.config.timeframe == "15minute"
+
+
+def test_timeframe_defaults_to_minute_when_not_specified(tmp_path):
+    repo = make_repo(tmp_path)
+    repo.save_deployment(make_deployment())
+
+    saved = repo.get_deployment("dep1")
+
+    assert saved.config.timeframe == "minute"

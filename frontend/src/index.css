@@ -20,6 +20,20 @@
   --status-warning: #fab219;
   --status-serious: #ec835a;
   --status-critical: #e66767;
+
+  /* Analytics dashboard card/chart accents — a calm, desaturated set
+     (not the semantic --status-* colors, which mean good/warning/bad
+     elsewhere) so summary cards/charts can each get a distinct hue
+     without borrowing meaning they don't have. */
+  --card-blue: #3987e5;
+  --card-green: #34d399;
+  --card-purple: #a78bfa;
+  --card-orange: #fb923c;
+  --card-teal: #2dd4bf;
+  --card-red: #ef5a5a;
+
+  --glass-surface: rgba(255, 255, 255, 0.035);
+  --glass-border: rgba(255, 255, 255, 0.08);
 }
 
 * {

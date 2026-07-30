@@ -10,7 +10,7 @@ class _FakeLiveEngine:
     def __init__(self, snapshot):
         self._snapshot = snapshot
 
-    def get_snapshot(self):
+    def get_snapshot(self, timeframe="minute"):
         return self._snapshot
 
 
@@ -196,3 +196,44 @@ def test_buy_trailing_stop_ratchets_down_and_exits_on_pullback():
 
     assert repo.get_open_position("RELIANCE") is None
     assert repo.get_all()[0].exit_price == 251.5
+
+
+# ---------------------------------------------------------------------------
+# Timeframe pass-through
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_requests_the_configured_timeframe_from_live_engine():
+    requested = []
+
+    class _RecordingLiveEngine:
+        def get_snapshot(self, timeframe="minute"):
+            requested.append(timeframe)
+            return {}
+
+    strategy = _FakeStrategy(OrderSide.SELL, [])
+    repo = PaperOrderRepository(PaperBroker(100_000), InProcessEventBus())
+    manager = ExecutionManager(
+        _RecordingLiveEngine(), repo, strategy, ["RELIANCE"], timeframe="15minute"
+    )
+
+    manager.evaluate()
+
+    assert requested == ["15minute"]
+
+
+def test_evaluate_defaults_to_minute_timeframe_when_not_configured():
+    requested = []
+
+    class _RecordingLiveEngine:
+        def get_snapshot(self, timeframe="minute"):
+            requested.append(timeframe)
+            return {}
+
+    strategy = _FakeStrategy(OrderSide.SELL, [])
+    repo = PaperOrderRepository(PaperBroker(100_000), InProcessEventBus())
+    manager = ExecutionManager(_RecordingLiveEngine(), repo, strategy, ["RELIANCE"])
+
+    manager.evaluate()
+
+    assert requested == ["minute"]

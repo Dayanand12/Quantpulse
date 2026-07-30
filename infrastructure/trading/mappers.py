@@ -7,7 +7,7 @@ that shape into core.domain.models).
 """
 
 from core.domain.enums import OrderSide
-from core.domain.models import Position, Trade
+from core.domain.models import Position, RejectedEntry, Trade
 
 
 def position_from_raw(symbol: str, raw: dict) -> Position:
@@ -35,3 +35,16 @@ def trade_from_raw(raw: dict) -> Trade:
     if "closed_at" in raw:
         kwargs["closed_at"] = raw["closed_at"]
     return Trade(**kwargs)
+
+
+def rejected_entry_from_raw(raw: dict) -> RejectedEntry:
+    return RejectedEntry(
+        symbol=raw["symbol"],
+        side=OrderSide(raw["side"]),
+        quantity=raw["quantity"],
+        price=raw["price"],
+        required_capital=raw["required_capital"],
+        available_capital=raw["available_capital"],
+        reason=raw["reason"],
+        at=raw["at"],
+    )

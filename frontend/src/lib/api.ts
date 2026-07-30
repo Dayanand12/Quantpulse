@@ -1,4 +1,6 @@
 import type {
+  AnalyticsFilters,
+  AnalyticsSummary,
   Deployment,
   DeploymentInput,
   MarketAnalysis,
@@ -47,6 +49,15 @@ export const api = {
     sendJSON<StrategySource>("/api/strategy-source", "POST", { name, source }),
   saveStrategySource: (name: string, source: string) =>
     sendJSON<StrategySource>(`/api/strategy-source/${name}`, "PUT", { source }),
+
+  analyticsSummary: (filters: AnalyticsFilters) => {
+    const params = new URLSearchParams({ timeframe: filters.timeframe })
+    if (filters.strategy) params.set("strategy", filters.strategy)
+    if (filters.symbol) params.set("symbol", filters.symbol)
+    if (filters.date_from) params.set("date_from", filters.date_from)
+    if (filters.date_to) params.set("date_to", filters.date_to)
+    return getJSON<AnalyticsSummary>(`/api/analytics/summary?${params.toString()}`)
+  },
 
   deployments: () => getJSON<Deployment[]>("/api/deployments"),
   createDeployment: (input: DeploymentInput) =>

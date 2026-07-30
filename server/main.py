@@ -13,6 +13,7 @@ import asyncio
 import datetime as dt
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -23,11 +24,20 @@ from backend.state_store import stage_results
 from backend.eod_report import generate_eod_report
 from backend.market_analysis_engine import MarketAnalysisEngine
 from backend.report_generator import generate_report
+from core.application.interfaces.trade_repository import TradeFilter
 from core.container import Container
-from core.domain.metrics import compute_performance_metrics
+from core.domain.metrics import (
+    compute_performance_metrics,
+    drawdown_series,
+    equity_curve,
+    pnl_by_period,
+    profit_distribution,
+    rolling_sharpe,
+)
 from core.domain.models import Deployment, StrategyConfig
 from core.exceptions import NotFoundError, ValidationError, register_exception_handlers
 from infrastructure.config.settings import Settings
+from live.live_engine import SUPPORTED_TIMEFRAMES
 from server.serializers import position_to_dict, snapshot_map_to_dict, trade_to_dict
 from server.ws_manager import ConnectionManager
 
@@ -45,6 +55,9 @@ class StrategySourceUpdateRequest(BaseModel):
     source: str
 
 
+HHMM_PATTERN = r"^([01]\d|2[0-3]):[0-5]\d$"
+
+
 class DeploymentRequest(BaseModel):
     strategy_name: str
     symbols: List[str]
@@ -55,6 +68,9 @@ class DeploymentRequest(BaseModel):
     trailing_pct: float = Field(gt=0)
     max_cycles_per_day: int = Field(gt=0)
     enabled: bool = True
+    start_time: str = Field(default="09:20", pattern=HHMM_PATTERN)
+    end_time: str = Field(default="11:30", pattern=HHMM_PATTERN)
+    timeframe: str = "minute"
 
 
 def _deployment_to_dict(deployment: Deployment) -> dict:
@@ -69,12 +85,15 @@ def _deployment_to_dict(deployment: Deployment) -> dict:
         "trailing_pct": deployment.config.trailing_pct,
         "max_cycles_per_day": deployment.config.max_cycles_per_day,
         "enabled": deployment.enabled,
+        "start_time": deployment.config.start_time,
+        "end_time": deployment.config.end_time,
+        "timeframe": deployment.config.timeframe,
     }
 
 
 def create_app(container: Container, settings: Settings) -> FastAPI:
 
-    analysis_engine = MarketAnalysisEngine(container.trading_engine)
+    analysis_engine = MarketAnalysisEngine(container.zerodha_client)
     manager = ConnectionManager()
 
     def _validate_deployment_request(body: DeploymentRequest) -> List[str]:
@@ -94,7 +113,47 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 "Add them to the watchlist first."
             )
 
+        if body.start_time >= body.end_time:
+            raise ValidationError(
+                f"start_time ({body.start_time}) must be before end_time ({body.end_time})."
+            )
+
+        if body.timeframe not in SUPPORTED_TIMEFRAMES:
+            raise ValidationError(
+                f"Unknown timeframe: {body.timeframe}. Must be one of: "
+                f"{', '.join(SUPPORTED_TIMEFRAMES)}."
+            )
+
+        _validate_capital_sufficiency(cleaned, body.quantity, body.capital)
+
         return cleaned
+
+    def _validate_capital_sufficiency(symbols: List[str], quantity: int, capital: float) -> None:
+        """Catches the exact mistake that cost hours of silent no-op paper
+        trading earlier: a quantity that's simply too expensive for the
+        capital at today's real price. Checked against whatever live tick
+        is already available (no new data source) — a symbol with no tick
+        yet is skipped rather than blocking on a data-availability gap."""
+        ticks = container.market_data_provider.get_latest_ticks()
+        problems = []
+
+        for symbol in symbols:
+            tick = ticks.get(symbol)
+            if tick is None or not tick.ltp:
+                continue
+
+            required = quantity * tick.ltp
+            if required > capital:
+                max_qty = int(capital // tick.ltp)
+                problems.append(
+                    f"{symbol}: need ₹{required:,.0f} for {quantity} shares at "
+                    f"₹{tick.ltp:,.2f}, but capital is only ₹{capital:,.0f}. Reduce "
+                    f"quantity to {max_qty} or fewer, or increase capital to at least "
+                    f"₹{required:,.0f}."
+                )
+
+        if problems:
+            raise ValidationError(" ".join(problems))
 
     def build_positions_view():
         snapshot = container.trading_engine.get_snapshot()
@@ -294,6 +353,86 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
         return aggregate_broker_status()["trade_log"]
 
     # -----------------------------
+    # REST: performance analytics (persisted trade history — survives
+    # restarts and spans deleted deployments, unlike aggregate_broker_status
+    # above which only reflects the current in-memory session). Every
+    # number here comes from core/domain/metrics.py — this route only
+    # filters, groups, and serializes; no metric math lives here.
+    # -----------------------------
+    @app.get("/api/analytics/summary")
+    def analytics_summary(
+        strategy: Optional[str] = None,
+        symbol: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        timeframe: str = "daily",
+    ):
+        if timeframe not in ("daily", "weekly", "monthly"):
+            raise ValidationError(f"Invalid timeframe: {timeframe}")
+
+        all_trades = container.trade_repository.list_trades()
+        available_strategies = sorted({t.strategy_name for t in all_trades if t.strategy_name})
+        available_symbols = sorted({t.symbol for t in all_trades})
+
+        trades = container.trade_repository.list_trades(
+            TradeFilter(
+                strategy_name=strategy or None,
+                symbol=symbol or None,
+                date_from=dt.date.fromisoformat(date_from) if date_from else None,
+                date_to=dt.date.fromisoformat(date_to) if date_to else None,
+            )
+        )
+
+        deployments = container.deployment_repository.list_deployments()
+        if strategy:
+            deployments = [d for d in deployments if d.strategy_name == strategy]
+
+        trades_by_deployment: dict = {}
+        for t in trades:
+            trades_by_deployment.setdefault(t.deployment_id, []).append(t)
+
+        by_strategy = []
+        seen_ids = set()
+        for deployment in deployments:
+            seen_ids.add(deployment.id)
+            deployment_trades = trades_by_deployment.get(deployment.id, [])
+            by_strategy.append({
+                "strategy_name": deployment.strategy_name,
+                "deployment_id": deployment.id,
+                "capital": deployment.capital,
+                "metrics": asdict(compute_performance_metrics(deployment_trades, deployment.capital)),
+            })
+
+        # Trades tagged with a deployment that's since been deleted still
+        # count towards "overall", and get their own row here — capital is
+        # unknown for it, so %-of-capital metrics come back None. Mirrors
+        # backend/eod_report.py's orphaned-deployment handling.
+        for deployment_id, deployment_trades in trades_by_deployment.items():
+            if deployment_id in seen_ids:
+                continue
+            strategy_name = deployment_trades[0].strategy_name or "Unknown strategy"
+            by_strategy.append({
+                "strategy_name": strategy_name,
+                "deployment_id": deployment_id,
+                "capital": 0,
+                "metrics": asdict(compute_performance_metrics(deployment_trades, 0)),
+            })
+
+        total_capital = sum(d.capital for d in deployments)
+
+        return {
+            "overall": asdict(compute_performance_metrics(trades, total_capital)),
+            "by_strategy": by_strategy,
+            "equity_curve": [asdict(p) for p in equity_curve(trades, timeframe)],
+            "pnl_by_period": [asdict(p) for p in pnl_by_period(trades, timeframe)],
+            "drawdown": [asdict(p) for p in drawdown_series(trades, total_capital)],
+            "profit_distribution": [asdict(b) for b in profit_distribution(trades)],
+            "rolling_sharpe": [asdict(p) for p in rolling_sharpe(trades, total_capital)],
+            "available_strategies": available_strategies,
+            "available_symbols": available_symbols,
+        }
+
+    # -----------------------------
     # REST: strategies + deployments
     # -----------------------------
     @app.get("/api/strategies")
@@ -352,6 +491,19 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                     "max_drawdown_pct": metrics.max_drawdown_pct,
                     "avg_r_multiple": metrics.avg_r_multiple,
                     "sharpe_ratio": metrics.sharpe_ratio,
+                    "rejected_entries": [
+                        {
+                            "symbol": r.symbol,
+                            "side": r.side.value,
+                            "quantity": r.quantity,
+                            "price": r.price,
+                            "required_capital": r.required_capital,
+                            "available_capital": r.available_capital,
+                            "reason": r.reason,
+                            "at": r.at.isoformat(),
+                        }
+                        for r in status.rejected_entries
+                    ],
                 }
             else:
                 entry["status"] = None
@@ -375,6 +527,9 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 target_pct=body.target_pct,
                 trailing_pct=body.trailing_pct,
                 max_cycles_per_day=body.max_cycles_per_day,
+                start_time=body.start_time,
+                end_time=body.end_time,
+                timeframe=body.timeframe,
             ),
             enabled=body.enabled,
         )
@@ -399,6 +554,9 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 target_pct=body.target_pct,
                 trailing_pct=body.trailing_pct,
                 max_cycles_per_day=body.max_cycles_per_day,
+                start_time=body.start_time,
+                end_time=body.end_time,
+                timeframe=body.timeframe,
             ),
             enabled=body.enabled,
         )

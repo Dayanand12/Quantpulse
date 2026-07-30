@@ -1,132 +1,110 @@
-import { useEffect, useState } from "react"
-import type { ReactNode } from "react"
-import { api } from "../lib/api"
-import { PnlText } from "../components/PnlText"
-import { fmtCurrency, fmtNumber, fmtPercent } from "../lib/format"
-import type { Deployment } from "../lib/types"
+import { ChartCard } from "../components/analytics/ChartCard"
+import { DrawdownChart } from "../components/analytics/DrawdownChart"
+import { EquityCurveChart } from "../components/analytics/EquityCurveChart"
+import { FilterBar } from "../components/analytics/FilterBar"
+import { CardSkeleton, ChartSkeleton, TableSkeleton } from "../components/analytics/LoadingSkeleton"
+import { MonthlyPnlChart } from "../components/analytics/MonthlyPnlChart"
+import { ProfitHistogram } from "../components/analytics/ProfitHistogram"
+import { RiskReturnScatter } from "../components/analytics/RiskReturnScatter"
+import { RollingSharpeChart } from "../components/analytics/RollingSharpeChart"
+import { StrategyComparisonBars } from "../components/analytics/StrategyComparisonBars"
+import { StrategyTable } from "../components/analytics/StrategyTable"
+import { SummaryCardRow } from "../components/analytics/SummaryCard"
+import { WinRateGauge } from "../components/analytics/WinRateGauge"
+import { useAnalytics } from "../hooks/useAnalytics"
 
-function MetricTile({ label, value, na }: { label: string; value: ReactNode; na?: string }) {
-  const isMissing = value === null || value === undefined
-
-  return (
-    <div className="rounded-md border border-[var(--border)] p-3">
-      <div className="text-xs text-[var(--ink-muted)]">{label}</div>
-      <div className="tabular-nums mt-1 text-lg font-semibold">
-        {isMissing ? (
-          <span className="text-sm font-normal text-[var(--ink-muted)]">
-            N/A{na ? ` — ${na}` : ""}
-          </span>
-        ) : (
-          value
-        )}
-      </div>
-    </div>
-  )
-}
+const PERIOD_LABEL = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" } as const
 
 export function Performance() {
-  const [deployments, setDeployments] = useState<Deployment[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    api
-      .deployments()
-      .then(setDeployments)
-      .catch(() => setError("Failed to load deployments."))
-      .finally(() => setLoading(false))
-  }, [])
-
-  if (loading) {
-    return <p className="text-sm text-[var(--ink-muted)]">Loading…</p>
-  }
+  const { filters, setFilters, resetFilters, data, loading, error } = useAnalytics()
+  const showSkeleton = loading && !data
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold">Performance</h1>
+      <div>
+        <h1 className="text-2xl font-semibold">Performance</h1>
+        <p className="mt-1 text-sm text-[var(--ink-muted)]">
+          Every number below comes from the same metrics engine for every strategy — nothing
+          here is strategy-specific.
+        </p>
+      </div>
+
       {error && <p className="text-sm text-[var(--status-critical)]">{error}</p>}
 
-      {deployments.length === 0 ? (
-        <p className="text-sm text-[var(--ink-muted)]">No deployments yet.</p>
-      ) : (
-        deployments.map((d) => (
-          <section
-            key={d.id}
-            className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5"
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <span className="font-medium">{d.strategy_name}</span>
-                <span className="ml-2 text-xs text-[var(--ink-muted)]">
-                  {d.symbols.join(", ")}
-                </span>
-              </div>
-              {!d.running && (
-                <span className="text-xs text-[var(--ink-muted)]">Not currently running</span>
-              )}
-            </div>
+      <FilterBar
+        filters={filters}
+        setFilters={setFilters}
+        onReset={resetFilters}
+        availableStrategies={data?.available_strategies ?? []}
+        availableSymbols={data?.available_symbols ?? []}
+      />
 
-            {!d.status ? (
-              <p className="text-sm text-[var(--ink-muted)]">
-                No live data yet — restart the backend to activate this deployment.
-              </p>
-            ) : (
-              <div className="grid grid-cols-4 gap-3">
-                <MetricTile label="Total Trades" value={d.status.total_trades} />
-                <MetricTile
-                  label="Win Rate"
-                  value={d.status.win_rate !== null ? fmtPercent(d.status.win_rate) : null}
-                  na="no trades yet"
-                />
-                <MetricTile
-                  label="Profit Factor"
-                  value={
-                    d.status.profit_factor !== null ? fmtNumber(d.status.profit_factor) : null
-                  }
-                  na="no losing trades yet"
-                />
-                <MetricTile label="Total P&L" value={<PnlText value={d.status.realized_pnl} />} />
+      {showSkeleton && (
+        <>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <CardSkeleton key={i} />
+            ))}
+          </div>
+          <TableSkeleton />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <ChartSkeleton key={i} />
+            ))}
+          </div>
+        </>
+      )}
 
-                <MetricTile
-                  label="Gross Profit"
-                  value={<PnlText value={d.status.gross_profit} />}
-                />
-                <MetricTile label="Gross Loss" value={<PnlText value={d.status.gross_loss} />} />
-                <MetricTile
-                  label="Max Drawdown"
-                  value={`${fmtCurrency(d.status.max_drawdown)}${
-                    d.status.max_drawdown_pct !== null
-                      ? ` (${fmtPercent(d.status.max_drawdown_pct)})`
-                      : ""
-                  }`}
-                />
-                <MetricTile
-                  label="Avg R-Multiple"
-                  value={
-                    d.status.avg_r_multiple !== null
-                      ? `${fmtNumber(d.status.avg_r_multiple)}R`
-                      : null
-                  }
-                  na="no trades with a tracked stop-loss yet"
-                />
+      {data && (
+        <div
+          className={`flex flex-col gap-6 transition-opacity duration-300 ${
+            loading ? "opacity-60" : "opacity-100"
+          }`}
+        >
+          <SummaryCardRow metrics={data.overall} />
 
-                <MetricTile
-                  label="Sharpe Ratio"
-                  value={
-                    d.status.sharpe_ratio !== null ? fmtNumber(d.status.sharpe_ratio) : null
-                  }
-                  na="need 2+ trading days"
-                />
-                <MetricTile
-                  label="Available Capital"
-                  value={fmtCurrency(d.status.available_capital)}
-                />
-                <MetricTile label="Open Positions" value={d.status.open_position_count} />
-                <MetricTile label="Capital Allocated" value={fmtCurrency(d.capital)} />
-              </div>
-            )}
-          </section>
-        ))
+          <StrategyTable rows={data.by_strategy} />
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <ChartCard title="Equity Curve" subtitle="Cumulative P&L across every closed trade">
+              <EquityCurveChart points={data.equity_curve} />
+            </ChartCard>
+
+            <ChartCard title="Drawdown" subtitle="Running drawdown from the equity peak">
+              <DrawdownChart points={data.drawdown} />
+            </ChartCard>
+
+            <ChartCard
+              title={`${PERIOD_LABEL[filters.timeframe]} P&L`}
+              subtitle="Net P&L per period, not cumulative"
+            >
+              <MonthlyPnlChart points={data.pnl_by_period} />
+            </ChartCard>
+
+            <ChartCard title="Rolling Sharpe" subtitle="Sharpe ratio over a trailing trading window">
+              <RollingSharpeChart points={data.rolling_sharpe} />
+            </ChartCard>
+
+            <ChartCard title="Win Rate" subtitle="Share of trades closed profitably">
+              <WinRateGauge value={data.overall.win_rate} />
+            </ChartCard>
+
+            <ChartCard title="Profit Distribution" subtitle="Histogram of per-trade P&L">
+              <ProfitHistogram buckets={data.profit_distribution} />
+            </ChartCard>
+
+            <ChartCard
+              title="Metrics by Strategy"
+              subtitle="Win rate, profit factor, and Sharpe side by side"
+            >
+              <StrategyComparisonBars rows={data.by_strategy} />
+            </ChartCard>
+
+            <ChartCard title="Risk vs Return" subtitle="Drawdown % vs return % — size is |Sharpe|">
+              <RiskReturnScatter rows={data.by_strategy} />
+            </ChartCard>
+          </div>
+        </div>
       )}
     </div>
   )

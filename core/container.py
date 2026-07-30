@@ -28,6 +28,7 @@ from core.application.interfaces.portfolio_service import IPortfolioService
 from core.application.interfaces.risk_engine import IRiskEngine
 from core.application.interfaces.strategy_registry import IStrategyRegistry
 from core.application.interfaces.strategy_source_repository import IStrategySourceRepository
+from core.application.interfaces.trade_repository import ITradeRepository
 from core.application.interfaces.trading_engine import ITradingEngine
 from core.application.interfaces.watchlist_repository import IWatchlistRepository
 from core.domain.models import Deployment, StrategyConfig
@@ -39,6 +40,7 @@ from infrastructure.notifications.console_notification_service import ConsoleNot
 from infrastructure.persistence.database import create_session_factory
 from infrastructure.persistence.sql_deployment_repository import SqlDeploymentRepository
 from infrastructure.persistence.sql_trade_journal import SqlTradeJournal
+from infrastructure.persistence.sql_trade_repository import SqlTradeRepository
 from infrastructure.persistence.sql_watchlist_repository import SqlWatchlistRepository
 from infrastructure.risk.permissive_risk_engine import PermissiveRiskEngine
 from infrastructure.strategies.file_strategy_registry import FileStrategyRegistry
@@ -53,6 +55,7 @@ from infrastructure.trading.paper_portfolio_service import PaperPortfolioService
 from live.execution_manager import ExecutionManager
 from live.live_engine import LiveEngine
 from live.paper_broker import PaperBroker
+from live.warm_start import warm_start_indicators
 from Data_ingestion.client import ZerodhaClient
 from Data_ingestion.config_loader import load_stocks
 import strategies as strategies_package
@@ -92,6 +95,13 @@ class Container:
     deployment_repository: IDeploymentRepository
     deployment_runtimes: List[DeploymentRuntime]
 
+    # Filtered/aggregated read access over the `trades` table (survives
+    # restarts, spans past/deleted deployments) — what the analytics API
+    # queries. backend/eod_report.py still uses session_factory directly
+    # for its own day-scoped query; both share the same TradeRecord
+    # mapping via infrastructure/persistence/sql_trade_repository.py.
+    trade_repository: ITradeRepository
+
     # Exposed so anything needing durable trade history (e.g.
     # backend/eod_report.py) can query the `trades` table directly,
     # without every caller threading its own session factory through.
@@ -105,6 +115,14 @@ class Container:
     # interface for a single, display-only caller.
     live_engine: LiveEngine
 
+    # backend/market_analysis_engine.py needs to pull historical candles
+    # for an arbitrary symbol on demand (not just whatever's in the
+    # watchlist's live tick cache) — that's a REST call IMarketDataProvider
+    # doesn't expose (it's ticks-only, see its docstring), so the concrete
+    # client is exposed directly, same documented-exception spirit as
+    # live_engine above.
+    zerodha_client: ZerodhaClient
+
 
 def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Container:
     """The one function allowed to construct concrete infrastructure."""
@@ -116,6 +134,7 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
         Path(strategies_package.__path__[0])
     )
     deployment_repository: IDeploymentRepository = SqlDeploymentRepository(session_factory)
+    trade_repository: ITradeRepository = SqlTradeRepository(session_factory)
 
     symbols = watchlist_repository.get_symbols()
     if not symbols:
@@ -143,6 +162,7 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
     SqlTradeJournal(session_factory, event_bus)
 
     live_engine = LiveEngine(symbols, capital=settings.initial_capital)
+    warm_start_indicators(live_engine, zerodha_client, symbols, zerodha_client.exchange)
     trading_engine: ITradingEngine = LiveEngineAdapter(live_engine)
 
     market_data_provider: IMarketDataProvider = ZerodhaMarketDataProvider(
@@ -175,6 +195,7 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
             target_pct=deployment.config.target_pct,
             trailing_pct=deployment.config.trailing_pct,
             max_cycles_per_day=deployment.config.max_cycles_per_day,
+            timeframe=deployment.config.timeframe,
         )
 
         deployment_runtimes.append(
@@ -199,5 +220,7 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
         deployment_repository=deployment_repository,
         deployment_runtimes=deployment_runtimes,
         live_engine=live_engine,
+        zerodha_client=zerodha_client,
+        trade_repository=trade_repository,
         session_factory=session_factory,
     )

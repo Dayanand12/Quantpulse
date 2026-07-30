@@ -25,7 +25,16 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        frontend.terminate()
+        if sys.platform == "win32":
+            # npm.cmd is a cmd.exe wrapper around node.exe (Vite) — terminate()
+            # only kills the wrapper and orphans the actual dev server, so kill
+            # the whole process tree by PID instead.
+            subprocess.run(
+                ["taskkill", "/PID", str(frontend.pid), "/T", "/F"],
+                capture_output=True,
+            )
+        else:
+            frontend.terminate()
         try:
             frontend.wait(timeout=10)
         except subprocess.TimeoutExpired:

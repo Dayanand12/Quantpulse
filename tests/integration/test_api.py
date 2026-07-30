@@ -395,6 +395,100 @@ def test_create_deployment_rejects_non_positive_capital(tmp_path):
     assert res.status_code == 422
 
 
+def test_create_deployment_defaults_active_window(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.post("/api/deployments", json=make_deployment_payload())
+
+    assert res.json()["start_time"] == "09:20"
+    assert res.json()["end_time"] == "11:30"
+
+
+def test_create_deployment_accepts_custom_active_window(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/deployments",
+            json=make_deployment_payload(start_time="13:00", end_time="15:00"),
+        )
+
+    assert res.status_code == 201
+    assert res.json()["start_time"] == "13:00"
+    assert res.json()["end_time"] == "15:00"
+
+
+def test_create_deployment_rejects_start_time_after_end_time(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/deployments",
+            json=make_deployment_payload(start_time="12:00", end_time="09:00"),
+        )
+
+    assert res.status_code == 400
+
+
+def test_create_deployment_rejects_malformed_time(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/deployments", json=make_deployment_payload(start_time="9:20")
+        )
+
+    assert res.status_code == 422
+
+
+def test_create_deployment_defaults_to_minute_timeframe(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.post("/api/deployments", json=make_deployment_payload())
+
+    assert res.json()["timeframe"] == "minute"
+
+
+def test_create_deployment_accepts_every_supported_timeframe(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        for timeframe in ("minute", "3minute", "5minute", "10minute", "15minute", "30minute"):
+            res = client.post(
+                "/api/deployments", json=make_deployment_payload(timeframe=timeframe)
+            )
+            assert res.status_code == 201, timeframe
+            assert res.json()["timeframe"] == timeframe
+
+
+def test_create_deployment_rejects_unsupported_timeframe(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/deployments", json=make_deployment_payload(timeframe="2minute")
+        )
+
+    assert res.status_code == 400
+
+
+def test_update_deployment_accepts_a_new_timeframe(tmp_path):
+    app, container = build_test_app(tmp_path)
+    seeded_id = container.deployment_repository.list_deployments()[0].id
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/api/deployments/{seeded_id}",
+            json=make_deployment_payload(timeframe="5minute"),
+        )
+
+    assert res.status_code == 200
+    assert res.json()["timeframe"] == "5minute"
+    assert container.deployment_repository.get_deployment(seeded_id).config.timeframe == "5minute"
+
+
 def test_update_deployment_overwrites_existing(tmp_path):
     app, container = build_test_app(tmp_path)
     seeded_id = container.deployment_repository.list_deployments()[0].id
@@ -430,3 +524,152 @@ def test_delete_deployment_removes_it(tmp_path):
         assert res.status_code == 200
 
     assert container.deployment_repository.get_deployment(seeded_id) is None
+
+
+def test_analytics_summary_with_no_trades_returns_empty_but_valid_shape(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        body = client.get("/api/analytics/summary").json()
+
+    assert set(body.keys()) == {
+        "overall", "by_strategy", "equity_curve", "pnl_by_period", "drawdown",
+        "profit_distribution", "rolling_sharpe", "available_strategies", "available_symbols",
+    }
+    assert body["overall"]["total_trades"] == 0
+    assert body["by_strategy"][0]["strategy_name"] == "orb_reversal"
+    assert body["by_strategy"][0]["metrics"]["total_trades"] == 0
+    assert body["equity_curve"] == []
+    assert body["available_strategies"] == []
+    assert body["available_symbols"] == []
+
+
+def test_analytics_summary_reflects_closed_trades(tmp_path):
+    app, container = build_test_app(tmp_path)
+    runtime = container.deployment_runtimes[0]
+
+    runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
+    runtime.order_repository.close_position("RELIANCE", 245.0, initial_stop_loss=252.0)
+    runtime.order_repository.open_position("TCS", OrderSide.SELL, 100.0, 10)
+    runtime.order_repository.close_position("TCS", 105.0, initial_stop_loss=102.0)
+
+    with TestClient(app) as client:
+        body = client.get("/api/analytics/summary").json()
+
+    assert body["overall"]["total_trades"] == 2
+    assert body["overall"]["winning_trades"] == 1
+    assert body["overall"]["losing_trades"] == 1
+    assert body["available_symbols"] == ["RELIANCE", "TCS"]
+    assert len(body["equity_curve"]) == 1  # both trades close same day -> one daily bucket
+    assert len(body["profit_distribution"]) >= 1
+
+    by_strategy = body["by_strategy"][0]
+    assert by_strategy["strategy_name"] == "orb_reversal"
+    assert by_strategy["metrics"]["total_trades"] == 2
+
+
+def test_analytics_summary_filters_by_symbol(tmp_path):
+    app, container = build_test_app(tmp_path)
+    runtime = container.deployment_runtimes[0]
+
+    runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
+    runtime.order_repository.close_position("RELIANCE", 245.0)
+    runtime.order_repository.open_position("TCS", OrderSide.SELL, 100.0, 10)
+    runtime.order_repository.close_position("TCS", 105.0)
+
+    with TestClient(app) as client:
+        body = client.get("/api/analytics/summary", params={"symbol": "TCS"}).json()
+
+    assert body["overall"]["total_trades"] == 1
+    # Filter narrows the trade set, but option lists stay fully populated
+    # (drawn from the unfiltered set) so dropdowns don't shrink under you.
+    assert body["available_symbols"] == ["RELIANCE", "TCS"]
+
+
+def test_create_deployment_rejects_when_undersized_for_live_price(tmp_path):
+    app, container = build_test_app(tmp_path)
+    container.market_data_provider._client.market_data = {
+        "TCS": {"LTP": 2447.0, "Volume": 1000},
+    }
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/deployments",
+            json=make_deployment_payload(symbols=["TCS"], capital=50_000, quantity=50),
+        )
+
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert "TCS" in detail
+    assert "50" in detail  # names the offending quantity or a workable one
+
+
+def test_create_deployment_accepts_when_capital_covers_quantity_at_live_price(tmp_path):
+    app, container = build_test_app(tmp_path)
+    container.market_data_provider._client.market_data = {
+        "TCS": {"LTP": 2447.0, "Volume": 1000},
+    }
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/deployments",
+            json=make_deployment_payload(symbols=["TCS"], capital=50_000, quantity=15),
+        )
+
+    assert res.status_code == 201
+
+
+def test_create_deployment_skips_capital_check_when_no_live_tick_yet(tmp_path):
+    # No tick seeded at all -> can't validate, so it must not block creation.
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/deployments",
+            json=make_deployment_payload(symbols=["TCS"], capital=50_000, quantity=50),
+        )
+
+    assert res.status_code == 201
+
+
+def test_update_deployment_rejects_when_undersized_for_live_price(tmp_path):
+    app, container = build_test_app(tmp_path)
+    seeded_id = container.deployment_repository.list_deployments()[0].id
+    container.market_data_provider._client.market_data = {
+        "RELIANCE": {"LTP": 3000.0, "Volume": 1000},
+    }
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/api/deployments/{seeded_id}",
+            json=make_deployment_payload(symbols=["RELIANCE"], capital=10_000, quantity=50),
+        )
+
+    assert res.status_code == 400
+    assert "RELIANCE" in res.json()["detail"]
+
+
+def test_deployments_status_surfaces_rejected_entries(tmp_path):
+    app, container = build_test_app(tmp_path)
+    runtime = container.deployment_runtimes[0]  # capital=100_000 by default seeding
+
+    # Deliberately oversized for the seeded deployment's capital.
+    runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 3000.0, 1000)
+
+    with TestClient(app) as client:
+        body = client.get("/api/deployments").json()
+
+    rejected = body[0]["status"]["rejected_entries"]
+    assert len(rejected) == 1
+    assert rejected[0]["symbol"] == "RELIANCE"
+    assert rejected[0]["reason"] == "insufficient_capital"
+    assert rejected[0]["required_capital"] == pytest.approx(3_000_000.0)
+
+
+def test_analytics_summary_rejects_invalid_timeframe(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.get("/api/analytics/summary", params={"timeframe": "hourly"})
+
+    assert res.status_code == 400

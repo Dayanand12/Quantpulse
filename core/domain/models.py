@@ -106,11 +106,28 @@ class Trade:
 
 
 @dataclass(frozen=True)
+class RejectedEntry:
+    """A candidate entry ExecutionManager tried and the broker turned
+    down — surfaced so "why hasn't this fired" is queryable via the API
+    instead of only ever printed to the server console."""
+
+    symbol: str
+    side: OrderSide
+    quantity: int
+    price: float
+    required_capital: float
+    available_capital: float
+    reason: str
+    at: datetime
+
+
+@dataclass(frozen=True)
 class PortfolioSnapshot:
     available_capital: float
     open_positions: tuple[Position, ...]
     total_trades: int
     trade_log: tuple[Trade, ...]
+    rejected_entries: tuple[RejectedEntry, ...] = ()
 
     @property
     def realized_pnl(self) -> float:
@@ -122,6 +139,21 @@ class StrategyConfig:
     """Universal risk/sizing parameters — same shape for every strategy,
     regardless of what its signal logic looks like. Defaults mirror the
     tested values in backtest/config.py.
+
+    start_time/end_time gate when live/deployment_runner.py evaluates this
+    deployment at all (both entries and exit management) — "HH:MM", 24h,
+    same string format as settings.eod_report_time. Defaults match the
+    window every deployment used before this was configurable per
+    deployment.
+
+    timeframe selects which bar size live/live_engine.py::LiveEngine
+    computes this deployment's indicators on — one of
+    live.live_engine.SUPPORTED_TIMEFRAMES's keys (Kite's own interval
+    naming: "minute", "3minute", "5minute", "10minute", "15minute",
+    "30minute"). Every timeframe is derived by resampling the same
+    1-minute base data, not fetched separately — see
+    docs/plans/per-strategy-timeframes.md. Default "minute" matches every
+    deployment's behavior before this was configurable.
     """
 
     quantity: int = 50
@@ -129,6 +161,9 @@ class StrategyConfig:
     target_pct: float = 2.0
     trailing_pct: float = 0.1
     max_cycles_per_day: int = 10
+    start_time: str = "09:20"
+    end_time: str = "11:30"
+    timeframe: str = "minute"
 
 
 @dataclass(frozen=True)
