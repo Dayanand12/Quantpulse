@@ -1,7 +1,7 @@
 import datetime as dt
 
 from core.domain.models import StrategyConfig
-from live.deployment_runner import _is_within_window, _parse_hhmm
+from runners.paper_trading.deployment_runner import _is_within_window, _parse_hhmm
 
 
 def test_parse_hhmm():

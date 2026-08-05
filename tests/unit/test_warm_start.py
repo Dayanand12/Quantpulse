@@ -1,6 +1,6 @@
 import datetime as dt
 
-from live.warm_start import warm_start_indicators
+from runners.paper_trading.warm_start import warm_start_indicators
 
 
 class FakeZerodhaClient:

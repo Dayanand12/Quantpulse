@@ -1,6 +1,6 @@
 import datetime as dt
 
-from live.live_engine import LiveEngine
+from runners.paper_trading.live_engine import LiveEngine
 
 
 def make_candles(count, start=None, start_price=100.0, step=0.1, tz=None):

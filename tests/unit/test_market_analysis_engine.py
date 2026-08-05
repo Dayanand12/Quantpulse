@@ -2,7 +2,7 @@ import datetime as dt
 
 import pytest
 
-from backend.market_analysis_engine import MarketAnalysisEngine
+from services.market_analysis_engine import MarketAnalysisEngine
 
 
 class FakeZerodhaClient:

@@ -114,6 +114,17 @@ export interface MarketAnalysis {
   suggested_side?: "BUY" | "SELL" | null
   summary?: string
   atr_pct?: number | null
+  // Rolling win rate for this exact (symbol, decision) pair — see
+  // services/market_analysis_engine.py's regime accuracy tracking. null
+  // when there's no repository wired up, or the decision is NO TRADE
+  // (nothing to score a win/loss against).
+  accuracy?: {
+    win_rate: number | null // null until n >= min_sample
+    n: number
+    min_sample: number
+    horizon_minutes: number
+    lookback_days: number
+  } | null
   error?: string
 }
 

@@ -11,7 +11,7 @@ from typing import Dict
 
 from core.application.interfaces.trading_engine import ITradingEngine
 from core.domain.models import MarketSnapshot, Tick
-from live.live_engine import LiveEngine
+from runners.paper_trading.live_engine import LiveEngine
 
 
 class LiveEngineAdapter(ITradingEngine):

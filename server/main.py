@@ -12,18 +12,19 @@ change at all.
 import asyncio
 import datetime as dt
 import uuid
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from backend.state_store import stage_results
-from backend.eod_report import generate_eod_report
-from backend.market_analysis_engine import MarketAnalysisEngine
-from backend.report_generator import generate_report
+from services.state_store import stage_results
+from services.eod_report import generate_all_time_report, generate_eod_report
+from services.market_analysis_engine import MarketAnalysisEngine
+from services.report_generator import generate_report
 from core.application.interfaces.trade_repository import TradeFilter
 from core.container import Container
 from core.domain.metrics import (
@@ -37,7 +38,7 @@ from core.domain.metrics import (
 from core.domain.models import Deployment, StrategyConfig
 from core.exceptions import NotFoundError, ValidationError, register_exception_handlers
 from infrastructure.config.settings import Settings
-from live.live_engine import SUPPORTED_TIMEFRAMES
+from runners.paper_trading.live_engine import SUPPORTED_TIMEFRAMES
 from server.serializers import position_to_dict, snapshot_map_to_dict, trade_to_dict
 from server.ws_manager import ConnectionManager
 
@@ -93,7 +94,7 @@ def _deployment_to_dict(deployment: Deployment) -> dict:
 
 def create_app(container: Container, settings: Settings) -> FastAPI:
 
-    analysis_engine = MarketAnalysisEngine(container.zerodha_client)
+    analysis_engine = MarketAnalysisEngine(container.zerodha_client, container.regime_call_repository)
     manager = ConnectionManager()
 
     def _validate_deployment_request(body: DeploymentRequest) -> List[str]:
@@ -124,36 +125,13 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 f"{', '.join(SUPPORTED_TIMEFRAMES)}."
             )
 
-        _validate_capital_sufficiency(cleaned, body.quantity, body.capital)
+        # No capital-vs-quantity check here: PaperBroker.enter() auto-downsizes
+        # a fixed quantity that's too expensive for a deployment's capital
+        # instead of rejecting the entry (paper trading only — see
+        # runners/paper_trading/paper_broker.py), so a mismatch here isn't
+        # a configuration error anymore.
 
         return cleaned
-
-    def _validate_capital_sufficiency(symbols: List[str], quantity: int, capital: float) -> None:
-        """Catches the exact mistake that cost hours of silent no-op paper
-        trading earlier: a quantity that's simply too expensive for the
-        capital at today's real price. Checked against whatever live tick
-        is already available (no new data source) — a symbol with no tick
-        yet is skipped rather than blocking on a data-availability gap."""
-        ticks = container.market_data_provider.get_latest_ticks()
-        problems = []
-
-        for symbol in symbols:
-            tick = ticks.get(symbol)
-            if tick is None or not tick.ltp:
-                continue
-
-            required = quantity * tick.ltp
-            if required > capital:
-                max_qty = int(capital // tick.ltp)
-                problems.append(
-                    f"{symbol}: need ₹{required:,.0f} for {quantity} shares at "
-                    f"₹{tick.ltp:,.2f}, but capital is only ₹{capital:,.0f}. Reduce "
-                    f"quantity to {max_qty} or fewer, or increase capital to at least "
-                    f"₹{required:,.0f}."
-                )
-
-        if problems:
-            raise ValidationError(" ".join(problems))
 
     def build_positions_view():
         snapshot = container.trading_engine.get_snapshot()
@@ -349,8 +327,17 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
         return build_positions_view()
 
     @app.get("/api/trades")
-    def trades():
-        return aggregate_broker_status()["trade_log"]
+    def trades(today: bool = False):
+        # Persisted (survives restarts), not aggregate_broker_status's
+        # in-memory trade_log — see list_deployments() above for why.
+        # `today` is resolved server-side (not passed as a date string by
+        # the caller) so the Live Dashboard's "today" always matches this
+        # process's own clock, not the browser's — no timezone mismatch.
+        filters = None
+        if today:
+            server_today = dt.date.today()
+            filters = TradeFilter(date_from=server_today, date_to=server_today)
+        return [trade_to_dict(t) for t in container.trade_repository.list_trades(filters)]
 
     # -----------------------------
     # REST: performance analytics (persisted trade history — survives
@@ -466,6 +453,19 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
     @app.get("/api/deployments")
     def list_deployments():
         runtimes_by_id = {r.deployment.id: r for r in container.deployment_runtimes}
+
+        # Trade history/counts/P&L below come from the persisted `trades`
+        # table, not each PaperBroker's in-memory trade_log — the broker
+        # resets to empty on every backend restart, which made these
+        # numbers (and the Trades/Live Dashboard pages) silently drop to 0
+        # after a restart even though the real history was never lost.
+        # available_capital/open_position_count are genuine live state and
+        # correctly still come from the broker.
+        persisted_by_deployment: Dict[str, list] = defaultdict(list)
+        for t in container.trade_repository.list_trades():
+            if t.deployment_id:
+                persisted_by_deployment[t.deployment_id].append(t)
+
         result = []
 
         for deployment in container.deployment_repository.list_deployments():
@@ -475,13 +475,12 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
 
             if runtime is not None:
                 status = runtime.portfolio_service.get_status()
-                metrics = compute_performance_metrics(
-                    list(status.trade_log), deployment.capital
-                )
+                persisted_trades = persisted_by_deployment.get(deployment.id, [])
+                metrics = compute_performance_metrics(persisted_trades, deployment.capital)
                 entry["status"] = {
                     "available_capital": status.available_capital,
-                    "realized_pnl": status.realized_pnl,
-                    "total_trades": status.total_trades,
+                    "realized_pnl": sum(t.pnl for t in persisted_trades),
+                    "total_trades": len(persisted_trades),
                     "open_position_count": len(status.open_positions),
                     "win_rate": metrics.win_rate,
                     "profit_factor": metrics.profit_factor,
@@ -651,6 +650,19 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             container.session_factory,
             container.deployment_repository,
             report_date,
+            settings.eod_report_dir,
+        )
+        return {"file": filepath}
+
+    # Same shape as /api/eod-report but unfiltered — every trade ever
+    # recorded, not just one day. A separate route rather than a query
+    # param on /api/eod-report since it isn't "a day", it's "no day filter
+    # at all", and shares nothing with the ?date= parsing above.
+    @app.get("/api/all-time-report")
+    def all_time_report():
+        filepath = generate_all_time_report(
+            container.session_factory,
+            container.deployment_repository,
             settings.eod_report_dir,
         )
         return {"file": filepath}

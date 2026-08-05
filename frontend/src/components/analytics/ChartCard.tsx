@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { ChartErrorBoundary } from "./ChartErrorBoundary"
 
 interface ChartCardProps {
   title: string
@@ -19,7 +20,7 @@ export function ChartCard({ title, subtitle, action, children }: ChartCardProps)
         </div>
         {action}
       </div>
-      {children}
+      <ChartErrorBoundary>{children}</ChartErrorBoundary>
     </div>
   )
 }

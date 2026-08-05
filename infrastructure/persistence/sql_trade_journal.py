@@ -42,6 +42,12 @@ class SqlTradeJournal:
                         initial_stop_loss=trade.initial_stop_loss,
                         deployment_id=trade.deployment_id,
                         strategy_name=trade.strategy_name,
+                        entry_rsi=trade.entry_rsi,
+                        entry_adx=trade.entry_adx,
+                        entry_atr_pct=trade.entry_atr_pct,
+                        entry_vwap=trade.entry_vwap,
+                        entry_volume_ratio=trade.entry_volume_ratio,
+                        market_condition=trade.market_condition,
                     )
                 )
                 session.commit()

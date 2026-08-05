@@ -25,6 +25,7 @@ from core.application.interfaces.market_data_provider import IMarketDataProvider
 from core.application.interfaces.notification_service import INotificationService
 from core.application.interfaces.order_repository import IOrderRepository
 from core.application.interfaces.portfolio_service import IPortfolioService
+from core.application.interfaces.regime_call_repository import IRegimeCallRepository
 from core.application.interfaces.risk_engine import IRiskEngine
 from core.application.interfaces.strategy_registry import IStrategyRegistry
 from core.application.interfaces.strategy_source_repository import IStrategySourceRepository
@@ -39,6 +40,7 @@ from infrastructure.events.in_process_event_bus import InProcessEventBus
 from infrastructure.notifications.console_notification_service import ConsoleNotificationService
 from infrastructure.persistence.database import create_session_factory
 from infrastructure.persistence.sql_deployment_repository import SqlDeploymentRepository
+from infrastructure.persistence.sql_regime_call_repository import SqlRegimeCallRepository
 from infrastructure.persistence.sql_trade_journal import SqlTradeJournal
 from infrastructure.persistence.sql_trade_repository import SqlTradeRepository
 from infrastructure.persistence.sql_watchlist_repository import SqlWatchlistRepository
@@ -52,10 +54,10 @@ from infrastructure.trading.market_data.zerodha_provider import ZerodhaMarketDat
 from infrastructure.trading.paper_order_repository import PaperOrderRepository
 from infrastructure.trading.paper_portfolio_service import PaperPortfolioService
 
-from live.execution_manager import ExecutionManager
-from live.live_engine import LiveEngine
-from live.paper_broker import PaperBroker
-from live.warm_start import warm_start_indicators
+from runners.paper_trading.execution_manager import ExecutionManager
+from runners.paper_trading.live_engine import LiveEngine
+from runners.paper_trading.paper_broker import PaperBroker
+from runners.paper_trading.warm_start import warm_start_indicators
 from Data_ingestion.client import ZerodhaClient
 from Data_ingestion.config_loader import load_stocks
 import strategies as strategies_package
@@ -123,6 +125,13 @@ class Container:
     # live_engine above.
     zerodha_client: ZerodhaClient
 
+    # backend/market_analysis_engine.py logs every _classify() call here
+    # and reads back a rolling win rate for the Decision panel's accuracy
+    # stat block (see core/application/interfaces/regime_call_repository.py);
+    # runners/paper_trading/regime_call_evaluator.py backfills the forward
+    # returns that win rate is computed from.
+    regime_call_repository: IRegimeCallRepository
+
 
 def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Container:
     """The one function allowed to construct concrete infrastructure."""
@@ -135,6 +144,7 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
     )
     deployment_repository: IDeploymentRepository = SqlDeploymentRepository(session_factory)
     trade_repository: ITradeRepository = SqlTradeRepository(session_factory)
+    regime_call_repository: IRegimeCallRepository = SqlRegimeCallRepository(session_factory)
 
     symbols = watchlist_repository.get_symbols()
     if not symbols:
@@ -223,4 +233,5 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
         zerodha_client=zerodha_client,
         trade_repository=trade_repository,
         session_factory=session_factory,
+        regime_call_repository=regime_call_repository,
     )

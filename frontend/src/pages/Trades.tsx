@@ -1,41 +1,39 @@
-import { useEffect } from "react"
-import { useLiveStore } from "../store/liveStore"
+import { useTrades } from "../hooks/useTrades"
 import { StatTile } from "../components/StatTile"
 import { PnlText } from "../components/PnlText"
 import { EquityCurve } from "../components/EquityCurve"
 import { fmtNumber, fmtPercent } from "../lib/format"
 
 export function Trades() {
-  const connect = useLiveStore((s) => s.connect)
-  const broker = useLiveStore((s) => s.brokerStatus)
+  const { trades: allTrades, loading, error } = useTrades()
 
-  useEffect(() => {
-    connect()
-  }, [connect])
-
-  const trades = [...broker.trade_log].reverse()
-  const totalPnl = broker.trade_log.reduce((sum, t) => sum + t.pnl, 0)
-  const wins = broker.trade_log.filter((t) => t.pnl > 0).length
-  const winRate = broker.trade_log.length > 0 ? (wins / broker.trade_log.length) * 100 : null
+  const trades = [...allTrades].reverse()
+  const totalPnl = allTrades.reduce((sum, t) => sum + t.pnl, 0)
+  const wins = allTrades.filter((t) => t.pnl > 0).length
+  const winRate = allTrades.length > 0 ? (wins / allTrades.length) * 100 : null
 
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-semibold">Trade Log</h1>
 
+      {error && <p className="text-sm text-[var(--status-critical)]">{error}</p>}
+
       <div className="grid grid-cols-3 gap-4">
-        <StatTile label="Total Trades" value={broker.trade_log.length} />
+        <StatTile label="Total Trades" value={allTrades.length} />
         <StatTile label="Win Rate" value={fmtPercent(winRate)} sub={`${wins} winners`} />
         <StatTile label="Total P&L" value={<PnlText value={totalPnl} />} />
       </div>
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
         <h2 className="mb-4 text-sm font-semibold text-[var(--ink-secondary)]">Equity Curve</h2>
-        <EquityCurve trades={broker.trade_log} />
+        <EquityCurve trades={allTrades} />
       </div>
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
         {trades.length === 0 ? (
-          <p className="text-sm text-[var(--ink-muted)]">No trades yet.</p>
+          <p className="text-sm text-[var(--ink-muted)]">
+            {loading ? "Loading trades…" : "No trades yet."}
+          </p>
         ) : (
           <table className="w-full text-left text-sm">
             <thead className="text-[var(--ink-muted)]">

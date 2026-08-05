@@ -2,7 +2,7 @@ from core.domain.enums import OrderSide
 from core.domain.events import PositionClosed, PositionOpened
 from infrastructure.events.in_process_event_bus import InProcessEventBus
 from infrastructure.trading.paper_order_repository import PaperOrderRepository
-from live.paper_broker import PaperBroker
+from runners.paper_trading.paper_broker import PaperBroker
 
 
 def make_repo():
@@ -23,10 +23,21 @@ def test_open_position_succeeds_and_publishes_event():
     assert repo.get_open_position("RELIANCE").entry_price == 250.0
 
 
-def test_open_position_rejected_when_capital_insufficient():
+def test_open_position_auto_downsizes_when_requested_quantity_exceeds_capital():
     repo, _ = make_repo()
 
+    # 10,000 shares @ 250 needs 2.5M — far more than the 100k capital —
+    # so this fits by quantity, not by rejecting the entry.
     ok = repo.open_position("RELIANCE", OrderSide.SELL, 250.0, 10_000)
+
+    assert ok is True
+    assert repo.get_open_position("RELIANCE").quantity == 400  # floor(100_000 / 250)
+
+
+def test_open_position_rejected_when_not_even_one_share_affordable():
+    repo, _ = make_repo()
+
+    ok = repo.open_position("RELIANCE", OrderSide.SELL, 200_000.0, 1)
 
     assert ok is False
     assert repo.get_open_position("RELIANCE") is None

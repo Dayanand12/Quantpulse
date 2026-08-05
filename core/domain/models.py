@@ -104,6 +104,23 @@ class Trade:
     deployment_id: Optional[str] = None
     strategy_name: Optional[str] = None
 
+    # The market condition the strategy actually saw when it entered —
+    # the same indicator snapshot IStrategy.screen() sees (see
+    # core/application/interfaces/strategy.py), captured at entry rather
+    # than exit since that's what drove the trade decision. Lets a report
+    # answer "which strategy works in which condition" instead of just
+    # "which strategy is profitable overall". None for trades logged
+    # before these fields existed, or if no snapshot was available.
+    entry_rsi: Optional[float] = None
+    entry_adx: Optional[float] = None
+    entry_atr_pct: Optional[float] = None
+    entry_vwap: Optional[float] = None
+    entry_volume_ratio: Optional[float] = None
+    # Human-readable summary of the above (see core/domain/market_condition.py),
+    # e.g. "Trending / High Volume / Above VWAP" — denormalized here so
+    # reports don't need to recompute it from the raw values.
+    market_condition: Optional[str] = None
+
 
 @dataclass(frozen=True)
 class RejectedEntry:

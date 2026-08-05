@@ -15,7 +15,7 @@ that module's standalone display loop.
 
 from typing import Dict, List
 
-from backend.filter_engine import stage1_filter, stage2_filter, stage3_filter
+from services.filter_engine import stage1_filter, stage2_filter, stage3_filter
 from core.application.interfaces.strategy import IStrategy
 from core.domain.enums import OrderSide
 

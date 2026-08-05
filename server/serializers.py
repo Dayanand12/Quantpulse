@@ -30,6 +30,8 @@ def trade_to_dict(trade: Trade) -> dict:
         "side": trade.side.value,
         "qty": trade.quantity,
         "pnl": trade.pnl,
+        "deployment_id": trade.deployment_id,
+        "strategy_name": trade.strategy_name,
     }
 
 

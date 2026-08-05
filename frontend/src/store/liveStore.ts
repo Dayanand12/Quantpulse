@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { wsBase } from "../lib/config"
 import type {
   BrokerStatus,
   LivePayload,
@@ -43,8 +44,7 @@ export const useLiveStore = create<LiveState>((set) => ({
     if (socket) return
 
     const open = () => {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws"
-      const ws = new WebSocket(`${proto}://${window.location.host}/ws/live`)
+      const ws = new WebSocket(`${wsBase()}/ws/live`)
       socket = ws
 
       ws.onopen = () => set({ connected: true })

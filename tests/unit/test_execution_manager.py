@@ -2,8 +2,8 @@ from core.application.interfaces.strategy import IStrategy
 from core.domain.enums import OrderSide
 from infrastructure.events.in_process_event_bus import InProcessEventBus
 from infrastructure.trading.paper_order_repository import PaperOrderRepository
-from live.execution_manager import ExecutionManager
-from live.paper_broker import PaperBroker
+from runners.paper_trading.execution_manager import ExecutionManager
+from runners.paper_trading.paper_broker import PaperBroker
 
 
 class _FakeLiveEngine:
@@ -104,6 +104,30 @@ def test_sell_exits_on_target_hit():
 
     assert repo.get_open_position("RELIANCE") is None
     assert repo.get_all()[0].exit_price == 244.0
+
+
+def test_closed_trade_carries_the_entry_market_snapshot():
+    # Regression coverage for the market-condition-on-trades feature: the
+    # indicator snapshot the strategy actually saw at entry must reach the
+    # closed Trade, end to end through PaperOrderRepository/PaperBroker.
+    snapshot = {
+        "RELIANCE": {"ltp": 250.0, "rsi": 28.0, "adx": 31.0, "atr_pct": 1.2, "vwap": 248.0, "volume_ratio": 2.0}
+    }
+    manager, repo, strategy = make_manager(snapshot, side=OrderSide.SELL)
+
+    manager.evaluate()  # enters at 250.0
+
+    strategy.candidates = []
+    snapshot["RELIANCE"]["ltp"] = 244.0  # breach target
+    manager.evaluate()
+
+    trade = repo.get_all()[0]
+    assert trade.entry_rsi == 28.0
+    assert trade.entry_adx == 31.0
+    assert trade.entry_atr_pct == 1.2
+    assert trade.entry_vwap == 248.0
+    assert trade.entry_volume_ratio == 2.0
+    assert trade.market_condition == "Trending / High Volume / Above VWAP"
 
 
 def test_does_not_reenter_symbol_already_open():

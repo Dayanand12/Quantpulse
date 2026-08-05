@@ -16,8 +16,21 @@ from core.domain.models import Position, Trade
 
 class IOrderRepository(ABC):
     @abstractmethod
-    def open_position(self, symbol: str, side: OrderSide, price: float, quantity: int) -> bool:
-        """Attempt to open a position. Returns False if rejected (e.g. capital)."""
+    def open_position(
+        self,
+        symbol: str,
+        side: OrderSide,
+        price: float,
+        quantity: int,
+        market_snapshot: Optional[dict] = None,
+    ) -> bool:
+        """Attempt to open a position. Returns False if rejected (e.g. capital).
+
+        `market_snapshot` is the same raw indicator dict IStrategy.screen()
+        was evaluated against (ltp, rsi, adx, atr_pct, vwap, volume_ratio,
+        ...) — optional, and carried through to the eventual Trade purely
+        for after-the-fact research (see core/domain/market_condition.py),
+        never used to decide whether the entry itself succeeds."""
 
     @abstractmethod
     def close_position(

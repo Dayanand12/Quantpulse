@@ -175,7 +175,19 @@ class ZerodhaClient:
     def start_live_data(self, symbols, exchange):
         """Stream live ticks via WebSocket with auto-reconnect."""
         exchange = exchange or self.exchange
-        tokens = {self.get_instrument_token(sym, exchange): sym for sym in symbols}
+
+        # A single delisted/renamed symbol (e.g. after a corporate action
+        # like a demerger) must not take down the whole websocket feed —
+        # skip it and keep streaming everything that did resolve.
+        tokens = {}
+        for sym in symbols:
+            try:
+                tokens[self.get_instrument_token(sym, exchange)] = sym
+            except ValueError as exc:
+                logging.warning("%s — skipping, not subscribed", exc)
+
+        if not tokens:
+            raise ValueError("❌ No symbols resolved to a valid instrument token")
 
         # dict that stores the latest tick for each symbol
         self.market_data = {}

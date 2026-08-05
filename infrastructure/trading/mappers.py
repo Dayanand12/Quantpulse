@@ -7,6 +7,7 @@ that shape into core.domain.models).
 """
 
 from core.domain.enums import OrderSide
+from core.domain.market_condition import classify_market_condition
 from core.domain.models import Position, RejectedEntry, Trade
 
 
@@ -34,6 +35,23 @@ def trade_from_raw(raw: dict) -> Trade:
     # than claiming a false precise time for old data.
     if "closed_at" in raw:
         kwargs["closed_at"] = raw["closed_at"]
+
+    # The strategy's own indicator snapshot at entry (see
+    # PaperBroker.enter()) — None for trades from before this existed, or
+    # if no snapshot was available (e.g. rejected entries never get here).
+    snapshot = raw.get("market_snapshot") or {}
+    kwargs["entry_rsi"] = snapshot.get("rsi")
+    kwargs["entry_adx"] = snapshot.get("adx")
+    kwargs["entry_atr_pct"] = snapshot.get("atr_pct")
+    kwargs["entry_vwap"] = snapshot.get("vwap")
+    kwargs["entry_volume_ratio"] = snapshot.get("volume_ratio")
+    kwargs["market_condition"] = classify_market_condition(
+        ltp=snapshot.get("ltp"),
+        adx=snapshot.get("adx"),
+        vwap=snapshot.get("vwap"),
+        volume_ratio=snapshot.get("volume_ratio"),
+    )
+
     return Trade(**kwargs)
 
 

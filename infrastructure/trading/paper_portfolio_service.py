@@ -7,7 +7,7 @@ from infrastructure.trading.mappers import (
     rejected_entry_from_raw,
     trade_from_raw,
 )
-from live.paper_broker import PaperBroker
+from runners.paper_trading.paper_broker import PaperBroker
 
 
 class PaperPortfolioService(IPortfolioService):

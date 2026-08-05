@@ -30,6 +30,12 @@ def record_to_trade(record: TradeRecord) -> Trade:
         initial_stop_loss=record.initial_stop_loss,
         deployment_id=record.deployment_id,
         strategy_name=record.strategy_name,
+        entry_rsi=record.entry_rsi,
+        entry_adx=record.entry_adx,
+        entry_atr_pct=record.entry_atr_pct,
+        entry_vwap=record.entry_vwap,
+        entry_volume_ratio=record.entry_volume_ratio,
+        market_condition=record.market_condition,
     )
 
 

@@ -216,7 +216,15 @@ class DrawdownPoint:
 
 def drawdown_series(trades: List[Trade], capital: float) -> List[DrawdownPoint]:
     """Running drawdown after every closed trade — the series behind
-    _max_drawdown's single number, for the Drawdown chart."""
+    _max_drawdown's single number, for the Drawdown chart.
+
+    Collapses trades that closed within the same second into a single
+    point (keeping the latest running drawdown for that second) instead of
+    emitting one point per trade. The chart renders at second resolution,
+    and this system can close dozens of trades in the same wall-clock
+    second (e.g. a bulk exit across a large watchlist) — without
+    collapsing, those would-be-duplicate timestamps aren't strictly
+    ascending, which the charting library rejects outright."""
     points: List[DrawdownPoint] = []
     cumulative = 0.0
     peak = 0.0
@@ -225,7 +233,13 @@ def drawdown_series(trades: List[Trade], capital: float) -> List[DrawdownPoint]:
         peak = max(peak, cumulative)
         dd = peak - cumulative
         dd_pct = (dd / capital) * 100 if capital > 0 else None
-        points.append(DrawdownPoint(closed_at=t.closed_at, drawdown=dd, drawdown_pct=dd_pct))
+        point = DrawdownPoint(closed_at=t.closed_at, drawdown=dd, drawdown_pct=dd_pct)
+
+        if points and points[-1].closed_at.replace(microsecond=0) == t.closed_at.replace(microsecond=0):
+            points[-1] = point
+        else:
+            points.append(point)
+
     return points
 
 

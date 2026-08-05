@@ -116,6 +116,24 @@ export function MarketAnalysis() {
             <div className="mt-3 text-sm text-[var(--ink-secondary)]">
               ATR: {fmtPercent(data?.atr_pct)} · as of {data?.time ?? "—"}
             </div>
+            {data?.accuracy && (
+              <div className="mt-3 border-t border-[var(--border)] pt-3 text-xs text-[var(--ink-muted)]">
+                {data.accuracy.win_rate !== null ? (
+                  <>
+                    <span className="font-medium text-[var(--ink-secondary)]">
+                      {data.accuracy.win_rate}% win rate
+                    </span>{" "}
+                    on {data.decision} calls for {data.symbol}, {data.accuracy.horizon_minutes}min
+                    horizon, last {data.accuracy.lookback_days} days (n={data.accuracy.n})
+                  </>
+                ) : (
+                  <>
+                    Collecting accuracy data for {data.decision} on {data.symbol}
+                    (n={data.accuracy.n}/{data.accuracy.min_sample})
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}

@@ -206,7 +206,13 @@ def test_pnl_by_period_is_net_per_bucket_not_cumulative():
 
 
 def test_drawdown_series_matches_max_drawdown():
-    trades = [make_trade(100), make_trade(-50), make_trade(80), make_trade(-120), make_trade(30)]
+    trades = [
+        make_trade(100, closed_at=dt.datetime(2026, 1, 1, 9, 20, 0)),
+        make_trade(-50, closed_at=dt.datetime(2026, 1, 1, 9, 20, 1)),
+        make_trade(80, closed_at=dt.datetime(2026, 1, 1, 9, 20, 2)),
+        make_trade(-120, closed_at=dt.datetime(2026, 1, 1, 9, 20, 3)),
+        make_trade(30, closed_at=dt.datetime(2026, 1, 1, 9, 20, 4)),
+    ]
 
     series = drawdown_series(trades, capital=100_000)
     metrics = compute_performance_metrics(trades, capital=100_000)
@@ -214,6 +220,25 @@ def test_drawdown_series_matches_max_drawdown():
     assert [round(p.drawdown, 2) for p in series] == [0, 50, 0, 120, 90]
     assert max(p.drawdown for p in series) == metrics.max_drawdown
     assert series[3].drawdown_pct == pytest.approx(0.12)
+
+
+def test_drawdown_series_collapses_trades_closed_in_the_same_second():
+    # Regression: bulk exits across a large watchlist can close dozens of
+    # trades within the same wall-clock second. The chart renders at
+    # second resolution and its library requires strictly ascending
+    # timestamps, so same-second trades must collapse to one point (the
+    # latest running drawdown) instead of producing duplicate timestamps.
+    same_second = dt.datetime(2026, 1, 1, 9, 20, 0, 123456)
+    trades = [
+        make_trade(100, closed_at=same_second),
+        make_trade(-50, closed_at=same_second.replace(microsecond=654321)),
+        make_trade(-30, closed_at=dt.datetime(2026, 1, 1, 9, 20, 1)),
+    ]
+
+    series = drawdown_series(trades, capital=100_000)
+
+    assert len(series) == 2  # the two same-second trades collapse to one point
+    assert [round(p.drawdown, 2) for p in series] == [50, 80]
 
 
 def test_profit_distribution_buckets_all_trades():

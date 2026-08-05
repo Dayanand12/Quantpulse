@@ -344,6 +344,66 @@ def test_deployments_status_includes_performance_metrics_after_trades(tmp_path):
     assert status["avg_r_multiple"] is not None
 
 
+def test_trades_today_filter_excludes_trades_from_other_days(tmp_path):
+    import datetime as dt
+
+    from infrastructure.persistence.database import unit_of_work
+    from infrastructure.persistence.models import TradeRecord
+
+    app, container = build_test_app(tmp_path)
+    runtime = container.deployment_runtimes[0]
+
+    # A real trade closed "now" (today).
+    runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
+    runtime.order_repository.close_position("RELIANCE", 245.0)
+
+    # A trade from a past day, inserted directly (closed_at is server-set
+    # by PaperBroker at real close time, so this simulates "yesterday").
+    with unit_of_work(container.session_factory) as session:
+        session.add(
+            TradeRecord(
+                symbol="TCS", side="SELL", quantity=10, entry_price=100.0, exit_price=95.0,
+                pnl=50.0, closed_at=dt.datetime.now() - dt.timedelta(days=1),
+                deployment_id=runtime.deployment.id, strategy_name="orb_reversal",
+            )
+        )
+
+    with TestClient(app) as client:
+        all_trades = client.get("/api/trades").json()
+        today_trades = client.get("/api/trades", params={"today": "true"}).json()
+
+    assert len(all_trades) == 2
+    assert len(today_trades) == 1
+    assert today_trades[0]["symbol"] == "RELIANCE"
+
+
+def test_trade_counts_survive_a_simulated_broker_restart(tmp_path):
+    # Regression: total_trades/realized_pnl/win_rate on both /api/trades
+    # and /api/deployments used to come from PaperBroker's in-memory
+    # trade_log, which resets to empty on every backend restart even
+    # though the trade was already durably persisted. Simulate a restart
+    # by wiping the broker's own log directly (bypassing the journal) and
+    # confirm both endpoints still see the trade via the persisted table.
+    app, container = build_test_app(tmp_path)
+    runtime = container.deployment_runtimes[0]
+
+    runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
+    runtime.order_repository.close_position("RELIANCE", 245.0)
+
+    runtime.order_repository._broker.trade_log = []  # simulate a fresh restart's empty broker
+
+    with TestClient(app) as client:
+        trades = client.get("/api/trades").json()
+        deployments = client.get("/api/deployments").json()
+
+    assert len(trades) == 1
+    assert trades[0]["symbol"] == "RELIANCE"
+
+    status = deployments[0]["status"]
+    assert status["total_trades"] == 1
+    assert status["realized_pnl"] == 250.0
+
+
 def test_create_deployment_succeeds_and_is_not_yet_running(tmp_path):
     app, container = build_test_app(tmp_path)
 
@@ -586,7 +646,9 @@ def test_analytics_summary_filters_by_symbol(tmp_path):
     assert body["available_symbols"] == ["RELIANCE", "TCS"]
 
 
-def test_create_deployment_rejects_when_undersized_for_live_price(tmp_path):
+def test_create_deployment_allows_quantity_too_large_for_capital(tmp_path):
+    # PaperBroker.enter() auto-downsizes an oversized quantity at trade time
+    # instead of rejecting it, so this is no longer a deploy-time error.
     app, container = build_test_app(tmp_path)
     container.market_data_provider._client.market_data = {
         "TCS": {"LTP": 2447.0, "Volume": 1000},
@@ -598,10 +660,7 @@ def test_create_deployment_rejects_when_undersized_for_live_price(tmp_path):
             json=make_deployment_payload(symbols=["TCS"], capital=50_000, quantity=50),
         )
 
-    assert res.status_code == 400
-    detail = res.json()["detail"]
-    assert "TCS" in detail
-    assert "50" in detail  # names the offending quantity or a workable one
+    assert res.status_code == 201
 
 
 def test_create_deployment_accepts_when_capital_covers_quantity_at_live_price(tmp_path):
@@ -619,20 +678,7 @@ def test_create_deployment_accepts_when_capital_covers_quantity_at_live_price(tm
     assert res.status_code == 201
 
 
-def test_create_deployment_skips_capital_check_when_no_live_tick_yet(tmp_path):
-    # No tick seeded at all -> can't validate, so it must not block creation.
-    app, _ = build_test_app(tmp_path)
-
-    with TestClient(app) as client:
-        res = client.post(
-            "/api/deployments",
-            json=make_deployment_payload(symbols=["TCS"], capital=50_000, quantity=50),
-        )
-
-    assert res.status_code == 201
-
-
-def test_update_deployment_rejects_when_undersized_for_live_price(tmp_path):
+def test_update_deployment_allows_quantity_too_large_for_capital(tmp_path):
     app, container = build_test_app(tmp_path)
     seeded_id = container.deployment_repository.list_deployments()[0].id
     container.market_data_provider._client.market_data = {
@@ -645,16 +691,16 @@ def test_update_deployment_rejects_when_undersized_for_live_price(tmp_path):
             json=make_deployment_payload(symbols=["RELIANCE"], capital=10_000, quantity=50),
         )
 
-    assert res.status_code == 400
-    assert "RELIANCE" in res.json()["detail"]
+    assert res.status_code == 200
 
 
 def test_deployments_status_surfaces_rejected_entries(tmp_path):
     app, container = build_test_app(tmp_path)
     runtime = container.deployment_runtimes[0]  # capital=100_000 by default seeding
 
-    # Deliberately oversized for the seeded deployment's capital.
-    runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 3000.0, 1000)
+    # Not even one share affordable — PaperBroker.enter() only truly
+    # rejects (rather than auto-downsizing) at this extreme.
+    runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 200_000.0, 1)
 
     with TestClient(app) as client:
         body = client.get("/api/deployments").json()
@@ -663,7 +709,7 @@ def test_deployments_status_surfaces_rejected_entries(tmp_path):
     assert len(rejected) == 1
     assert rejected[0]["symbol"] == "RELIANCE"
     assert rejected[0]["reason"] == "insufficient_capital"
-    assert rejected[0]["required_capital"] == pytest.approx(3_000_000.0)
+    assert rejected[0]["required_capital"] == pytest.approx(200_000.0)
 
 
 def test_analytics_summary_rejects_invalid_timeframe(tmp_path):

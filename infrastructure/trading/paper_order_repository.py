@@ -18,7 +18,7 @@ from core.domain.enums import OrderSide
 from core.domain.events import PositionClosed, PositionOpened
 from core.domain.models import Position, Trade
 from infrastructure.trading.mappers import position_from_raw, trade_from_raw
-from live.paper_broker import PaperBroker
+from runners.paper_trading.paper_broker import PaperBroker
 
 
 class PaperOrderRepository(IOrderRepository, ITradeRepository):
@@ -34,8 +34,15 @@ class PaperOrderRepository(IOrderRepository, ITradeRepository):
         self._deployment_id = deployment_id
         self._strategy_name = strategy_name
 
-    def open_position(self, symbol: str, side: OrderSide, price: float, quantity: int) -> bool:
-        entered = self._broker.enter(symbol, side.value, price, quantity)
+    def open_position(
+        self,
+        symbol: str,
+        side: OrderSide,
+        price: float,
+        quantity: int,
+        market_snapshot: Optional[dict] = None,
+    ) -> bool:
+        entered = self._broker.enter(symbol, side.value, price, quantity, market_snapshot=market_snapshot)
         if entered:
             position = Position(symbol=symbol, side=side, quantity=quantity, entry_price=price)
             self._event_bus.publish(PositionOpened(position=position))

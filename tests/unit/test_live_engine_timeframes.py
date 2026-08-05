@@ -2,7 +2,7 @@ import datetime as dt
 
 import polars as pl
 
-from live.live_engine import LiveEngine, SUPPORTED_TIMEFRAMES
+from runners.paper_trading.live_engine import LiveEngine, SUPPORTED_TIMEFRAMES
 
 
 def make_1min_df(count, start=None, start_price=100.0, step=1.0):

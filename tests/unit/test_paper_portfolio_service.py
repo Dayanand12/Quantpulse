@@ -2,7 +2,7 @@ from core.domain.enums import OrderSide
 from infrastructure.events.in_process_event_bus import InProcessEventBus
 from infrastructure.trading.paper_order_repository import PaperOrderRepository
 from infrastructure.trading.paper_portfolio_service import PaperPortfolioService
-from live.paper_broker import PaperBroker
+from runners.paper_trading.paper_broker import PaperBroker
 
 
 def test_portfolio_snapshot_reflects_capital_positions_and_trades():

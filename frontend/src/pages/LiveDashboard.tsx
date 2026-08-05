@@ -1,5 +1,6 @@
 import { useEffect } from "react"
 import { useLiveStore } from "../store/liveStore"
+import { useTrades } from "../hooks/useTrades"
 import { StatTile } from "../components/StatTile"
 import { PnlText } from "../components/PnlText"
 import { MarketTickerBar } from "../components/MarketTickerBar"
@@ -12,13 +13,19 @@ export function LiveDashboard() {
   const broker = useLiveStore((s) => s.brokerStatus)
   const positions = useLiveStore((s) => s.positions)
   const marketTicker = useLiveStore((s) => s.marketTicker)
+  // Today only, resolved server-side — persisted (survives a mid-day
+  // restart) but resets naturally when the next trading day starts,
+  // unlike the Trade Log page which shows full history. available_capital/
+  // open_positions above stay on the live WebSocket feed since those are
+  // genuine live state, not trade history.
+  const { trades: todaysTrades } = useTrades({ today: true })
 
   useEffect(() => {
     connect()
   }, [connect])
 
-  const realizedPnl = broker.trade_log.reduce((sum, t) => sum + t.pnl, 0)
-  const recentTrades = [...broker.trade_log].slice(-8).reverse()
+  const realizedPnl = todaysTrades.reduce((sum, t) => sum + t.pnl, 0)
+  const recentTrades = [...todaysTrades].slice(-8).reverse()
 
   const funnel: Array<{ label: string; symbols: string[]; color: string }> = [
     { label: "Stage 1", symbols: stageResults.ORB.stage1, color: "var(--status-warning)" },
@@ -35,7 +42,7 @@ export function LiveDashboard() {
       <div className="grid grid-cols-4 gap-4">
         <StatTile label="Available Capital" value={fmtCurrency(broker.available_capital)} />
         <StatTile label="Open Positions" value={positions.length} />
-        <StatTile label="Total Trades" value={broker.total_trades} />
+        <StatTile label="Total Trades" value={todaysTrades.length} />
         <StatTile label="Realized P&L" value={<PnlText value={realizedPnl} />} />
       </div>
 

@@ -12,13 +12,14 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 import uvicorn
 
 from Data_ingestion.run_client import initialize_trading_environment
-from backend.filter_engine import start_engine
+from services.filter_engine import start_engine
 from core.container import build_container
 from infrastructure.config.settings import get_settings
 from infrastructure.logging.logger import configure_logging, get_logger
 from infrastructure.persistence.migrate import run_migrations
-from live.deployment_runner import run_deployments
-from live.eod_scheduler import run_eod_scheduler
+from runners.paper_trading.deployment_runner import run_deployments
+from runners.paper_trading.eod_scheduler import run_eod_scheduler
+from runners.paper_trading.regime_call_evaluator import run_regime_call_evaluator
 from server.main import create_app
 
 
@@ -79,6 +80,19 @@ def main():
             container.deployment_repository,
             settings.eod_report_time,
             settings.eod_report_dir,
+        ),
+        daemon=True,
+    ).start()
+
+    # -----------------------------
+    # Regime accuracy tracking: backfill forward returns on logged
+    # _classify() calls (backend/market_analysis_engine.py) so the
+    # Decision panel's win-rate stat has data to compute against.
+    # -----------------------------
+    threading.Thread(
+        target=lambda: run_regime_call_evaluator(
+            container.zerodha_client,
+            container.regime_call_repository,
         ),
         daemon=True,
     ).start()
