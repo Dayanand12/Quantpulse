@@ -40,7 +40,18 @@ class Settings(BaseSettings):
     # produces a snapshot for them).
     market_ticker_symbols: List[str] = ["NIFTY 50", "NIFTY BANK"]
 
-    database_url: str = "sqlite:///./quantpulse.db"
+    # Deliberately NOT inside the OneDrive-synced repo folder — a live
+    # SQLite file getting synced mid-write is what corrupted the previous
+    # copy (cloud sync grabbing the file while a page was being written).
+    # See services/db_backup.py for the actual backup strategy.
+    database_url: str = "sqlite:///C:/Trading/QuantPulse/data/quantpulse.db"
+
+    # Same reasoning as database_url — this hit real OneDrive storage
+    # quota pressure once these grew into the multi-GB range (many years
+    # of 1-minute OHLCV across 200+ symbols), which OneDrive was
+    # continuously trying to sync in the background. See
+    # runners/backtesting/historical_loader.py for how this gets read.
+    historical_data_dir: str = "C:/Trading/QuantPulse/data/historical_data"
 
     log_level: str = "INFO"
 
@@ -49,6 +60,12 @@ class Settings(BaseSettings):
     # backend process is running at that time.
     eod_report_time: str = "15:35"
     eod_report_dir: str = "reports"
+
+    # Fires right after the EOD report, same daily schedule (see
+    # eod_report_time). Uploaded via the "gdrivebackup" rclone remote
+    # (`rclone listremotes`) — set up once outside this app.
+    db_backup_dir: str = "backups"
+    db_backup_remote: str = "gdrivebackup:QuantPulseBackups"
 
     @property
     def is_production(self) -> bool:

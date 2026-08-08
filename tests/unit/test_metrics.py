@@ -7,16 +7,29 @@ from core.domain.metrics import (
     compute_performance_metrics,
     drawdown_series,
     equity_curve,
+    heatmap_by_strategy_and_condition,
+    heatmap_by_strategy_and_symbol,
     pnl_by_period,
     profit_distribution,
     rolling_sharpe,
+    strategy_correlation,
+    strategy_trend,
 )
 from core.domain.models import Trade
 
 
-def make_trade(pnl, entry_price=100.0, initial_stop_loss=None, quantity=10, closed_at=None):
+def make_trade(
+    pnl,
+    entry_price=100.0,
+    initial_stop_loss=None,
+    quantity=10,
+    closed_at=None,
+    symbol="RELIANCE",
+    strategy_name=None,
+    market_condition=None,
+):
     return Trade(
-        symbol="RELIANCE",
+        symbol=symbol,
         side=OrderSide.SELL,
         quantity=quantity,
         entry_price=entry_price,
@@ -24,6 +37,8 @@ def make_trade(pnl, entry_price=100.0, initial_stop_loss=None, quantity=10, clos
         pnl=pnl,
         closed_at=closed_at or dt.datetime(2026, 1, 1),
         initial_stop_loss=initial_stop_loss,
+        strategy_name=strategy_name,
+        market_condition=market_condition,
     )
 
 
@@ -97,6 +112,59 @@ def test_avg_r_multiple_excludes_trades_without_initial_stop_loss():
     metrics = compute_performance_metrics(trades, capital=100_000)
 
     assert metrics.avg_r_multiple == pytest.approx(1.0)
+
+
+def test_heatmap_by_strategy_and_symbol_groups_and_excludes_no_strategy():
+    trades = [
+        make_trade(100, symbol="RELIANCE", strategy_name="ema_crossover"),
+        make_trade(-40, symbol="RELIANCE", strategy_name="ema_crossover"),
+        make_trade(50, symbol="TCS", strategy_name="ema_crossover"),
+        make_trade(20, symbol="RELIANCE", strategy_name="vwap_reclaim"),
+        make_trade(999, symbol="RELIANCE", strategy_name=None),  # excluded: no strategy
+    ]
+
+    rows = heatmap_by_strategy_and_symbol(trades)
+    by_key = {(r.row, r.column): r.cell for r in rows}
+
+    assert set(by_key.keys()) == {
+        ("ema_crossover", "RELIANCE"),
+        ("ema_crossover", "TCS"),
+        ("vwap_reclaim", "RELIANCE"),
+    }
+    assert by_key[("ema_crossover", "RELIANCE")].total_trades == 2
+    assert by_key[("ema_crossover", "RELIANCE")].total_pnl == 60
+    assert by_key[("ema_crossover", "TCS")].total_trades == 1
+
+
+def test_heatmap_by_strategy_and_condition_excludes_missing_condition():
+    trades = [
+        make_trade(100, strategy_name="ema_crossover", market_condition="Trending / High Volume"),
+        make_trade(-30, strategy_name="ema_crossover", market_condition="Trending / High Volume"),
+        make_trade(50, strategy_name="ema_crossover", market_condition="Ranging / Normal Volume"),
+        make_trade(10, strategy_name="ema_crossover", market_condition=None),  # excluded
+    ]
+
+    rows = heatmap_by_strategy_and_condition(trades)
+    by_key = {(r.row, r.column): r.cell for r in rows}
+
+    assert set(by_key.keys()) == {
+        ("ema_crossover", "Trending / High Volume"),
+        ("ema_crossover", "Ranging / Normal Volume"),
+    }
+    assert by_key[("ema_crossover", "Trending / High Volume")].total_trades == 2
+    assert by_key[("ema_crossover", "Ranging / Normal Volume")].total_trades == 1
+
+
+def test_heatmap_cell_has_no_capital_dependent_fields():
+    trades = [make_trade(100, strategy_name="ema_crossover"), make_trade(-40, strategy_name="ema_crossover")]
+
+    cell = heatmap_by_strategy_and_symbol(trades)[0].cell
+
+    assert cell.total_trades == 2
+    assert cell.win_rate == 50.0
+    assert cell.profit_factor == pytest.approx(2.5)
+    assert not hasattr(cell, "max_drawdown_pct")
+    assert not hasattr(cell, "sharpe_ratio")
 
 
 def test_avg_r_multiple_is_none_when_no_trade_has_stop_loss():
@@ -289,3 +357,71 @@ def test_rolling_sharpe_one_point_per_trading_day():
     # Each later window has exactly 2 trading days of returns -> a value
     assert points[1].sharpe_ratio is not None
     assert points[2].sharpe_ratio is not None
+
+
+def test_strategy_trend_accumulates_within_each_strategy_separately():
+    day1 = dt.datetime(2026, 1, 1)
+    day2 = dt.datetime(2026, 1, 2)
+    trades = [
+        make_trade(100, closed_at=day1, strategy_name="ema_crossover"),
+        make_trade(-30, closed_at=day2, strategy_name="ema_crossover"),
+        make_trade(50, closed_at=day2, strategy_name="vwap_reclaim"),
+    ]
+
+    points = strategy_trend(trades, bucket="daily")
+    ema_points = [p for p in points if p.strategy_name == "ema_crossover"]
+    vwap_points = [p for p in points if p.strategy_name == "vwap_reclaim"]
+
+    assert [p.cumulative_pnl for p in ema_points] == [100, 70]
+    # vwap_reclaim's only trade is on day2 — its own series starts fresh
+    # at that trade's P&L, not offset by ema_crossover's day1 total.
+    assert [p.cumulative_pnl for p in vwap_points] == [50]
+    assert [p.bucket for p in vwap_points] == [day2.date()]
+
+
+def test_strategy_trend_excludes_trades_without_strategy():
+    trades = [make_trade(100, strategy_name=None)]
+
+    assert strategy_trend(trades) == []
+
+
+def test_strategy_correlation_perfectly_correlated_strategies():
+    day1 = dt.datetime(2026, 1, 1)
+    day2 = dt.datetime(2026, 1, 2)
+    day3 = dt.datetime(2026, 1, 3)
+    trades = [
+        make_trade(100, closed_at=day1, strategy_name="a"),
+        make_trade(-50, closed_at=day2, strategy_name="a"),
+        make_trade(30, closed_at=day3, strategy_name="a"),
+        make_trade(100, closed_at=day1, strategy_name="b"),
+        make_trade(-50, closed_at=day2, strategy_name="b"),
+        make_trade(30, closed_at=day3, strategy_name="b"),
+    ]
+
+    pairs = strategy_correlation(trades)
+
+    assert len(pairs) == 1
+    assert pairs[0].strategy_a == "a"
+    assert pairs[0].strategy_b == "b"
+    assert pairs[0].correlation == pytest.approx(1.0)
+
+
+def test_strategy_correlation_perfectly_anti_correlated_strategies():
+    day1 = dt.datetime(2026, 1, 1)
+    day2 = dt.datetime(2026, 1, 2)
+    trades = [
+        make_trade(100, closed_at=day1, strategy_name="a"),
+        make_trade(-50, closed_at=day2, strategy_name="a"),
+        make_trade(-100, closed_at=day1, strategy_name="b"),
+        make_trade(50, closed_at=day2, strategy_name="b"),
+    ]
+
+    pairs = strategy_correlation(trades)
+
+    assert pairs[0].correlation == pytest.approx(-1.0)
+
+
+def test_strategy_correlation_none_pairs_with_fewer_than_two_strategies():
+    trades = [make_trade(100, strategy_name="a"), make_trade(-30, strategy_name=None)]
+
+    assert strategy_correlation(trades) == []

@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from core.container import build_container
+from core.domain.charges import ChargeConfig, compute_charges
 from core.domain.enums import OrderSide
 from infrastructure.config.settings import Environment, Settings
 from infrastructure.persistence.database import Base, create_session_factory
@@ -215,6 +216,55 @@ def test_watchlist_put_rejects_empty_list(tmp_path):
     assert res.status_code == 400
 
 
+def test_charge_config_get_returns_defaults_when_nothing_saved(tmp_path):
+    app, _ = build_test_app(tmp_path)
+    defaults = ChargeConfig()
+
+    with TestClient(app) as client:
+        body = client.get("/api/settings/charges").json()
+
+    assert body["brokerage_pct"] == defaults.brokerage_pct
+    assert body["gst_pct"] == defaults.gst_pct
+
+
+def test_charge_config_put_saves_and_persists(tmp_path):
+    app, _ = build_test_app(tmp_path)
+    custom = {
+        "brokerage_pct": 0.0005,
+        "brokerage_max_per_order": 25.0,
+        "stt_pct": 0.0003,
+        "exchange_txn_pct": 0.00003,
+        "sebi_pct": 0.000001,
+        "stamp_duty_pct": 0.00004,
+        "gst_pct": 0.18,
+    }
+
+    with TestClient(app) as client:
+        res = client.put("/api/settings/charges", json=custom)
+        assert res.status_code == 200
+        assert res.json() == custom
+
+        assert client.get("/api/settings/charges").json() == custom
+
+
+def test_charge_config_put_rejects_negative_rate(tmp_path):
+    app, _ = build_test_app(tmp_path)
+    body = {
+        "brokerage_pct": -0.0001,
+        "brokerage_max_per_order": 20.0,
+        "stt_pct": 0.00025,
+        "exchange_txn_pct": 0.0000297,
+        "sebi_pct": 0.000001,
+        "stamp_duty_pct": 0.00003,
+        "gst_pct": 0.18,
+    }
+
+    with TestClient(app) as client:
+        res = client.put("/api/settings/charges", json=body)
+
+    assert res.status_code == 422
+
+
 def test_strategies_lists_discovered_strategies(tmp_path):
     app, _ = build_test_app(tmp_path)
 
@@ -328,7 +378,11 @@ def test_deployments_status_includes_performance_metrics_after_trades(tmp_path):
     runtime = container.deployment_runtimes[0]
 
     # Two trades, one win one loss, both with a stop-loss captured, so
-    # win_rate/profit_factor/avg_r_multiple all become computable.
+    # win_rate/profit_factor/avg_r_multiple all become computable. Every
+    # closed trade now has brokerage/STT/exchange/SEBI/stamp duty/GST
+    # deducted (core/domain/charges.py, wired end-to-end via
+    # build_container's real charge_config_repository) — profit_factor is
+    # net of those, not the raw 250/150 price-difference ratio.
     runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
     runtime.order_repository.close_position("RELIANCE", 245.0, initial_stop_loss=252.0)
     runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
@@ -337,10 +391,16 @@ def test_deployments_status_includes_performance_metrics_after_trades(tmp_path):
     with TestClient(app) as client:
         body = client.get("/api/deployments").json()
 
+    default_config = ChargeConfig()
+    win_charges = compute_charges(250.0, 245.0, 50, OrderSide.SELL, default_config).total
+    loss_charges = compute_charges(250.0, 253.0, 50, OrderSide.SELL, default_config).total
+    net_win = 250.0 - win_charges
+    net_loss = -150.0 - loss_charges
+
     status = body[0]["status"]
     assert status["total_trades"] == 2
     assert status["win_rate"] == 50.0
-    assert status["profit_factor"] == pytest.approx(250 / 150)
+    assert status["profit_factor"] == pytest.approx(net_win / abs(net_loss))
     assert status["avg_r_multiple"] is not None
 
 
@@ -353,17 +413,27 @@ def test_trades_today_filter_excludes_trades_from_other_days(tmp_path):
     app, container = build_test_app(tmp_path)
     runtime = container.deployment_runtimes[0]
 
-    # A real trade closed "now" (today).
-    runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
-    runtime.order_repository.close_position("RELIANCE", 245.0)
+    # Inserted directly with controlled closed_at times rather than via
+    # close_position() (which stamps real wall-clock datetime.now() —
+    # today's date but not necessarily within the 09:15-15:30 market-hours
+    # window /api/trades?today=true now filters to, see
+    # infrastructure/persistence/sql_trade_repository.py's MARKET_OPEN/
+    # MARKET_CLOSE bounds).
+    today_market_hours = dt.datetime.combine(dt.date.today(), dt.time(11, 0))
+    yesterday_market_hours = today_market_hours - dt.timedelta(days=1)
 
-    # A trade from a past day, inserted directly (closed_at is server-set
-    # by PaperBroker at real close time, so this simulates "yesterday").
     with unit_of_work(container.session_factory) as session:
         session.add(
             TradeRecord(
+                symbol="RELIANCE", side="SELL", quantity=50, entry_price=250.0, exit_price=245.0,
+                pnl=250.0, closed_at=today_market_hours,
+                deployment_id=runtime.deployment.id, strategy_name="orb_reversal",
+            )
+        )
+        session.add(
+            TradeRecord(
                 symbol="TCS", side="SELL", quantity=10, entry_price=100.0, exit_price=95.0,
-                pnl=50.0, closed_at=dt.datetime.now() - dt.timedelta(days=1),
+                pnl=50.0, closed_at=yesterday_market_hours,
                 deployment_id=runtime.deployment.id, strategy_name="orb_reversal",
             )
         )
@@ -399,9 +469,13 @@ def test_trade_counts_survive_a_simulated_broker_restart(tmp_path):
     assert len(trades) == 1
     assert trades[0]["symbol"] == "RELIANCE"
 
+    # realized_pnl is net of charges (core/domain/charges.py) — see the
+    # module docstring on this file's ChargeConfig import.
+    expected_charges = compute_charges(250.0, 245.0, 50, OrderSide.SELL, ChargeConfig()).total
     status = deployments[0]["status"]
     assert status["total_trades"] == 1
-    assert status["realized_pnl"] == 250.0
+    assert status["realized_pnl"] == pytest.approx(250.0 - expected_charges)
+    assert status["gross_realized_pnl"] == 250.0
 
 
 def test_create_deployment_succeeds_and_is_not_yet_running(tmp_path):
@@ -594,7 +668,9 @@ def test_analytics_summary_with_no_trades_returns_empty_but_valid_shape(tmp_path
 
     assert set(body.keys()) == {
         "overall", "by_strategy", "equity_curve", "pnl_by_period", "drawdown",
-        "profit_distribution", "rolling_sharpe", "available_strategies", "available_symbols",
+        "profit_distribution", "rolling_sharpe", "heatmap_strategy_symbol",
+        "heatmap_strategy_condition", "strategy_trend", "strategy_correlation",
+        "available_strategies", "available_symbols",
     }
     assert body["overall"]["total_trades"] == 0
     assert body["by_strategy"][0]["strategy_name"] == "orb_reversal"

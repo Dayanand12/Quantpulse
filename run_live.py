@@ -80,6 +80,9 @@ def main():
             container.deployment_repository,
             settings.eod_report_time,
             settings.eod_report_dir,
+            settings.database_url,
+            settings.db_backup_dir,
+            settings.db_backup_remote,
         ),
         daemon=True,
     ).start()

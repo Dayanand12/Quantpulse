@@ -4,6 +4,7 @@ import { useLiveStore } from "../store/liveStore"
 import { StatTile } from "../components/StatTile"
 import { ConnectionDot } from "../components/ConnectionDot"
 import { WatchlistEditor } from "../components/WatchlistEditor"
+import { ChargeConfigEditor } from "../components/ChargeConfigEditor"
 import { fmtCurrency } from "../lib/format"
 
 export function Settings() {
@@ -39,6 +40,7 @@ export function Settings() {
       </div>
 
       <WatchlistEditor />
+      <ChargeConfigEditor />
     </div>
   )
 }

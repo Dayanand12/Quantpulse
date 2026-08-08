@@ -11,6 +11,8 @@ const NAV_ITEMS = [
   { to: "/market-analysis", label: "Market Analysis" },
   { to: "/strategies", label: "Strategies" },
   { to: "/strategy-builder", label: "Strategy Builder" },
+  { to: "/backtest", label: "Backtest" },
+  { to: "/analysis", label: "Analysis" },
   { to: "/settings", label: "Settings" },
 ]
 

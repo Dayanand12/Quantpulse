@@ -18,6 +18,7 @@ from typing import List
 
 from sqlalchemy.orm import sessionmaker
 
+from core.application.interfaces.charge_config_repository import IChargeConfigRepository
 from core.application.interfaces.current_user_provider import ICurrentUserProvider
 from core.application.interfaces.deployment_repository import IDeploymentRepository
 from core.application.interfaces.event_bus import IEventBus
@@ -39,6 +40,7 @@ from infrastructure.config.settings import Settings
 from infrastructure.events.in_process_event_bus import InProcessEventBus
 from infrastructure.notifications.console_notification_service import ConsoleNotificationService
 from infrastructure.persistence.database import create_session_factory
+from infrastructure.persistence.sql_charge_config_repository import SqlChargeConfigRepository
 from infrastructure.persistence.sql_deployment_repository import SqlDeploymentRepository
 from infrastructure.persistence.sql_regime_call_repository import SqlRegimeCallRepository
 from infrastructure.persistence.sql_trade_journal import SqlTradeJournal
@@ -132,6 +134,11 @@ class Container:
     # returns that win rate is computed from.
     regime_call_repository: IRegimeCallRepository
 
+    # The editable brokerage/tax rate card (core/domain/charges.py) — used
+    # both by each deployment's PaperOrderRepository at trade-close time and
+    # by server/main.py's GET/PUT /api/settings/charges.
+    charge_config_repository: IChargeConfigRepository
+
 
 def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Container:
     """The one function allowed to construct concrete infrastructure."""
@@ -145,6 +152,7 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
     deployment_repository: IDeploymentRepository = SqlDeploymentRepository(session_factory)
     trade_repository: ITradeRepository = SqlTradeRepository(session_factory)
     regime_call_repository: IRegimeCallRepository = SqlRegimeCallRepository(session_factory)
+    charge_config_repository: IChargeConfigRepository = SqlChargeConfigRepository(session_factory)
 
     symbols = watchlist_repository.get_symbols()
     if not symbols:
@@ -190,7 +198,11 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
 
         broker = PaperBroker(deployment.capital)
         order_repository = PaperOrderRepository(
-            broker, event_bus, deployment.id, deployment.strategy_name
+            broker,
+            event_bus,
+            deployment.id,
+            deployment.strategy_name,
+            charge_config_repository=charge_config_repository,
         )
         portfolio_service = PaperPortfolioService(broker)
         strategy = strategy_registry.get_strategy(deployment.strategy_name)
@@ -234,4 +246,5 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
         trade_repository=trade_repository,
         session_factory=session_factory,
         regime_call_repository=regime_call_repository,
+        charge_config_repository=charge_config_repository,
     )

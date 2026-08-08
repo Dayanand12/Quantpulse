@@ -8,7 +8,10 @@ import { ProfitHistogram } from "../components/analytics/ProfitHistogram"
 import { RiskReturnScatter } from "../components/analytics/RiskReturnScatter"
 import { RollingSharpeChart } from "../components/analytics/RollingSharpeChart"
 import { StrategyComparisonBars } from "../components/analytics/StrategyComparisonBars"
+import { StrategyCorrelationMatrix } from "../components/analytics/StrategyCorrelationMatrix"
+import { StrategyHeatmap } from "../components/analytics/StrategyHeatmap"
 import { StrategyTable } from "../components/analytics/StrategyTable"
+import { StrategyTrendChart } from "../components/analytics/StrategyTrendChart"
 import { SummaryCardRow } from "../components/analytics/SummaryCard"
 import { WinRateGauge } from "../components/analytics/WinRateGauge"
 import { useAnalytics } from "../hooks/useAnalytics"
@@ -64,6 +67,42 @@ export function Performance() {
           <SummaryCardRow metrics={data.overall} />
 
           <StrategyTable rows={data.by_strategy} />
+
+          <ChartCard
+            title="Strategy × Symbol"
+            subtitle="Win rate by strategy and stock, under the current filters — add or remove a strategy and it appears/disappears here automatically"
+          >
+            <StrategyHeatmap
+              rows={data.heatmap_strategy_symbol}
+              columnLabel="Symbol"
+              emptySubtitle="Needs closed trades with a strategy attached under the current filters."
+            />
+          </ChartCard>
+
+          <ChartCard
+            title="Strategy × Market Condition"
+            subtitle="Win rate by strategy and entry-time market condition (Trending/Ranging × Volume × VWAP side) — narrow to one symbol above to drill in"
+          >
+            <StrategyHeatmap
+              rows={data.heatmap_strategy_condition}
+              columnLabel="Market Condition"
+              emptySubtitle="Needs closed trades with a strategy and a recorded entry market condition."
+            />
+          </ChartCard>
+
+          <ChartCard
+            title="Strategy Trend"
+            subtitle={`Cumulative P&L per strategy, ${PERIOD_LABEL[filters.timeframe].toLowerCase()} — is a strategy still working, or decaying?`}
+          >
+            <StrategyTrendChart points={data.strategy_trend} />
+          </ChartCard>
+
+          <ChartCard
+            title="Strategy Correlation"
+            subtitle="Pearson correlation of daily P&L between strategies — high correlation means they win/lose together, so running both adds less diversification than it looks like"
+          >
+            <StrategyCorrelationMatrix pairs={data.strategy_correlation} />
+          </ChartCard>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <ChartCard title="Equity Curve" subtitle="Cumulative P&L across every closed trade">

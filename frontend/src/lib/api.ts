@@ -1,6 +1,7 @@
 import type {
   AnalyticsFilters,
   AnalyticsSummary,
+  ChargeConfig,
   Deployment,
   DeploymentInput,
   MarketAnalysis,
@@ -71,4 +72,8 @@ export const api = {
     sendJSON<Deployment>(`/api/deployments/${id}`, "PUT", input),
   deleteDeployment: (id: string) =>
     sendJSON<{ deleted: string }>(`/api/deployments/${id}`, "DELETE"),
+
+  chargeConfig: () => getJSON<ChargeConfig>("/api/settings/charges"),
+  saveChargeConfig: (config: ChargeConfig) =>
+    sendJSON<ChargeConfig>("/api/settings/charges", "PUT", config),
 }

@@ -48,6 +48,8 @@ class SqlTradeJournal:
                         entry_vwap=trade.entry_vwap,
                         entry_volume_ratio=trade.entry_volume_ratio,
                         market_condition=trade.market_condition,
+                        charges=trade.charges,
+                        net_pnl=trade.net_pnl,
                     )
                 )
                 session.commit()

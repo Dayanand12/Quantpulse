@@ -1,3 +1,4 @@
+from core.domain.charges import ChargeConfig, compute_charges
 from core.domain.enums import OrderSide
 from core.domain.events import PositionClosed, PositionOpened
 from infrastructure.events.in_process_event_bus import InProcessEventBus
@@ -5,10 +6,27 @@ from infrastructure.trading.paper_order_repository import PaperOrderRepository
 from runners.paper_trading.paper_broker import PaperBroker
 
 
-def make_repo():
+class FakeChargeConfigRepository:
+    def __init__(self, config=None):
+        self._config = config or ChargeConfig()
+
+    def get_config(self):
+        return self._config
+
+    def save_config(self, config):
+        self._config = config
+        return config
+
+
+def make_repo(charge_config_repository=None):
     broker = PaperBroker(initial_capital=100_000)
     bus = InProcessEventBus()
-    return PaperOrderRepository(broker, bus), bus
+    return (
+        PaperOrderRepository(
+            broker, bus, charge_config_repository=charge_config_repository
+        ),
+        bus,
+    )
 
 
 def test_open_position_succeeds_and_publishes_event():
@@ -109,3 +127,23 @@ def test_close_position_without_stop_loss_leaves_it_none():
     repo.close_position("RELIANCE", 245.0)
 
     assert repo.get_all()[0].initial_stop_loss is None
+
+
+def test_close_position_leaves_charges_none_without_a_charge_config_repository():
+    repo, _ = make_repo()  # no charge_config_repository injected
+    repo.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
+    trade = repo.close_position("RELIANCE", 245.0)
+
+    assert trade.charges is None
+    assert trade.net_pnl is None
+
+
+def test_close_position_computes_charges_when_charge_config_repository_is_injected():
+    repo, _ = make_repo(charge_config_repository=FakeChargeConfigRepository())
+    repo.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
+    trade = repo.close_position("RELIANCE", 245.0)
+
+    expected = compute_charges(250.0, 245.0, 50, OrderSide.SELL, ChargeConfig())
+
+    assert trade.charges == expected.total
+    assert trade.net_pnl == trade.pnl - expected.total

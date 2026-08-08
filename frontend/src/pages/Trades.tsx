@@ -8,8 +8,13 @@ export function Trades() {
   const { trades: allTrades, loading, error } = useTrades()
 
   const trades = [...allTrades].reverse()
-  const totalPnl = allTrades.reduce((sum, t) => sum + t.pnl, 0)
-  const wins = allTrades.filter((t) => t.pnl > 0).length
+  // net_pnl (post brokerage/STT/exchange/SEBI/stamp duty/GST — see
+  // core/domain/charges.py) is what "realized profit" means; fall back to
+  // gross pnl only for a trade closed before charges existed.
+  const netOf = (t: (typeof allTrades)[number]) => t.net_pnl ?? t.pnl
+  const totalPnl = allTrades.reduce((sum, t) => sum + netOf(t), 0)
+  const totalCharges = allTrades.reduce((sum, t) => sum + (t.charges ?? 0), 0)
+  const wins = allTrades.filter((t) => netOf(t) > 0).length
   const winRate = allTrades.length > 0 ? (wins / allTrades.length) * 100 : null
 
   return (
@@ -18,10 +23,11 @@ export function Trades() {
 
       {error && <p className="text-sm text-[var(--status-critical)]">{error}</p>}
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <StatTile label="Total Trades" value={allTrades.length} />
         <StatTile label="Win Rate" value={fmtPercent(winRate)} sub={`${wins} winners`} />
-        <StatTile label="Total P&L" value={<PnlText value={totalPnl} />} />
+        <StatTile label="Realized P&L (net)" value={<PnlText value={totalPnl} />} />
+        <StatTile label="Total Charges" value={<PnlText value={-totalCharges} />} />
       </div>
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
@@ -44,7 +50,9 @@ export function Trades() {
                 <th className="pb-2 font-normal">Entry</th>
                 <th className="pb-2 font-normal">Exit</th>
                 <th className="pb-2 font-normal">Qty</th>
-                <th className="pb-2 font-normal">P&L</th>
+                <th className="pb-2 font-normal">Gross P&L</th>
+                <th className="pb-2 font-normal">Charges</th>
+                <th className="pb-2 font-normal">Net P&L</th>
               </tr>
             </thead>
             <tbody>
@@ -58,6 +66,12 @@ export function Trades() {
                   <td className="tabular-nums py-2">{t.qty}</td>
                   <td className="py-2">
                     <PnlText value={t.pnl} />
+                  </td>
+                  <td className="tabular-nums py-2 text-[var(--ink-muted)]">
+                    {t.charges !== null ? fmtNumber(t.charges) : "—"}
+                  </td>
+                  <td className="py-2">
+                    <PnlText value={netOf(t)} />
                   </td>
                 </tr>
               ))}

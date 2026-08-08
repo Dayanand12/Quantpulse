@@ -5,7 +5,7 @@ backend/eod_report.py imports it from here rather than keeping its own
 copy, now that a second caller (analytics) needs the same mapping.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, time
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -16,6 +16,13 @@ from core.domain.enums import OrderSide
 from core.domain.models import Trade
 from infrastructure.persistence.database import unit_of_work
 from infrastructure.persistence.models import TradeRecord
+
+# NSE equity session bounds — a date_from/date_to filter means "that
+# trading day," not the calendar day, so a single-day range (date_from ==
+# date_to) spans exactly market open to market close rather than midnight
+# to midnight.
+MARKET_OPEN = time(9, 15)
+MARKET_CLOSE = time(15, 30)
 
 
 def record_to_trade(record: TradeRecord) -> Trade:
@@ -36,6 +43,8 @@ def record_to_trade(record: TradeRecord) -> Trade:
         entry_vwap=record.entry_vwap,
         entry_volume_ratio=record.entry_volume_ratio,
         market_condition=record.market_condition,
+        charges=record.charges,
+        net_pnl=record.net_pnl,
     )
 
 
@@ -53,11 +62,12 @@ class SqlTradeRepository(ITradeRepository):
             stmt = stmt.where(TradeRecord.symbol == filters.symbol)
         if filters.date_from:
             stmt = stmt.where(
-                TradeRecord.closed_at >= datetime.combine(filters.date_from, datetime.min.time())
+                TradeRecord.closed_at >= datetime.combine(filters.date_from, MARKET_OPEN)
             )
         if filters.date_to:
-            end = datetime.combine(filters.date_to, datetime.min.time()) + timedelta(days=1)
-            stmt = stmt.where(TradeRecord.closed_at < end)
+            stmt = stmt.where(
+                TradeRecord.closed_at <= datetime.combine(filters.date_to, MARKET_CLOSE)
+            )
 
         with unit_of_work(self._session_factory) as session:
             records = session.scalars(stmt)

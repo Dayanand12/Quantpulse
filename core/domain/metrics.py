@@ -26,16 +26,30 @@ from core.domain.models import Trade
 Bucket = Literal["daily", "weekly", "monthly"]
 
 
+def _net(t: Trade) -> float:
+    """Realized P&L for one trade, net of brokerage/STT/exchange/SEBI/stamp
+    duty/GST (core/domain/charges.py) — the actual money made or lost, not
+    just the raw entry/exit price difference. Falls back to the gross
+    `pnl` for the rare trade closed before charges existed and never
+    backfilled (see infrastructure/persistence/alembic/versions/
+    c8f3a1d9e5b7_...py, which backfills every historical trade), so this
+    never silently treats a charge-less trade as free.
+    """
+    return t.net_pnl if t.net_pnl is not None else t.pnl
+
+
 @dataclass(frozen=True)
 class PerformanceMetrics:
     total_trades: int
     winning_trades: int
     losing_trades: int
-    win_rate: Optional[float]  # percent
+    win_rate: Optional[float]  # percent, net-of-charges win/loss
     profit_factor: Optional[float]  # gross_profit / abs(gross_loss); None if no losses yet
-    gross_profit: float
+    gross_profit: float  # sum of net-P&L winning trades (still net of charges, despite the name — see total_charges)
     gross_loss: float  # negative or zero
-    total_pnl: float
+    total_pnl: float  # net of charges — this is "realized profit"
+    total_charges: float  # sum of every trade's brokerage+STT+exchange+SEBI+stamp duty+GST
+    gross_total_pnl: float  # sum of raw entry/exit P&L, before charges — for comparison against total_pnl
     avg_win: Optional[float]  # mean P&L of winning trades; None if no wins yet
     avg_loss: Optional[float]  # mean P&L of losing trades (negative); None if no losses yet
     max_drawdown: float  # currency, off the cumulative-P&L equity curve
@@ -55,6 +69,8 @@ def compute_performance_metrics(trades: List[Trade], capital: float) -> Performa
             gross_profit=0.0,
             gross_loss=0.0,
             total_pnl=0.0,
+            total_charges=0.0,
+            gross_total_pnl=0.0,
             avg_win=None,
             avg_loss=None,
             max_drawdown=0.0,
@@ -66,13 +82,15 @@ def compute_performance_metrics(trades: List[Trade], capital: float) -> Performa
     ordered = _sorted_by_close(trades)
     total_trades = len(ordered)
 
-    wins = [t for t in ordered if t.pnl > 0]
-    losses = [t for t in ordered if t.pnl < 0]
+    wins = [t for t in ordered if _net(t) > 0]
+    losses = [t for t in ordered if _net(t) < 0]
 
     win_rate = (len(wins) / total_trades) * 100
-    gross_profit = sum(t.pnl for t in wins)
-    gross_loss = sum(t.pnl for t in losses)
-    total_pnl = sum(t.pnl for t in ordered)
+    gross_profit = sum(_net(t) for t in wins)
+    gross_loss = sum(_net(t) for t in losses)
+    total_pnl = sum(_net(t) for t in ordered)
+    total_charges = sum(t.charges if t.charges is not None else 0.0 for t in ordered)
+    gross_total_pnl = sum(t.pnl for t in ordered)
     profit_factor = (gross_profit / abs(gross_loss)) if gross_loss < 0 else None
     avg_win = (gross_profit / len(wins)) if wins else None
     avg_loss = (gross_loss / len(losses)) if losses else None
@@ -92,6 +110,8 @@ def compute_performance_metrics(trades: List[Trade], capital: float) -> Performa
         gross_profit=gross_profit,
         gross_loss=gross_loss,
         total_pnl=total_pnl,
+        total_charges=total_charges,
+        gross_total_pnl=gross_total_pnl,
         avg_win=avg_win,
         avg_loss=avg_loss,
         max_drawdown=max_drawdown,
@@ -110,7 +130,7 @@ def _max_drawdown(ordered_trades: List[Trade]) -> float:
     peak = 0.0
     max_dd = 0.0
     for t in ordered_trades:
-        cumulative += t.pnl
+        cumulative += _net(t)
         peak = max(peak, cumulative)
         max_dd = max(max_dd, peak - cumulative)
     return max_dd
@@ -124,7 +144,7 @@ def _avg_r_multiple(ordered_trades: List[Trade]) -> Optional[float]:
         risk_per_share = abs(t.entry_price - t.initial_stop_loss)
         if risk_per_share <= 0:
             continue
-        r_multiples.append(t.pnl / (risk_per_share * t.quantity))
+        r_multiples.append(_net(t) / (risk_per_share * t.quantity))
 
     return (sum(r_multiples) / len(r_multiples)) if r_multiples else None
 
@@ -132,7 +152,7 @@ def _avg_r_multiple(ordered_trades: List[Trade]) -> Optional[float]:
 def _daily_pnl(trades: List[Trade]) -> Dict[date, float]:
     daily: Dict[date, float] = defaultdict(float)
     for t in trades:
-        daily[t.closed_at.date()] += t.pnl
+        daily[t.closed_at.date()] += _net(t)
     return daily
 
 
@@ -185,7 +205,7 @@ def equity_curve(trades: List[Trade], bucket: Bucket = "daily") -> List[EquityPo
     points: List[EquityPoint] = []
     cumulative = 0.0
     for t in _sorted_by_close(trades):
-        cumulative += t.pnl
+        cumulative += _net(t)
         b = _bucket_start(t.closed_at.date(), bucket)
         if points and points[-1].bucket == b:
             points[-1] = EquityPoint(bucket=b, cumulative_pnl=cumulative)
@@ -203,7 +223,7 @@ class PeriodPnl:
 def pnl_by_period(trades: List[Trade], bucket: Bucket = "monthly") -> List[PeriodPnl]:
     totals: Dict[date, float] = defaultdict(float)
     for t in trades:
-        totals[_bucket_start(t.closed_at.date(), bucket)] += t.pnl
+        totals[_bucket_start(t.closed_at.date(), bucket)] += _net(t)
     return [PeriodPnl(bucket=b, pnl=pnl) for b, pnl in sorted(totals.items())]
 
 
@@ -229,7 +249,7 @@ def drawdown_series(trades: List[Trade], capital: float) -> List[DrawdownPoint]:
     cumulative = 0.0
     peak = 0.0
     for t in _sorted_by_close(trades):
-        cumulative += t.pnl
+        cumulative += _net(t)
         peak = max(peak, cumulative)
         dd = peak - cumulative
         dd_pct = (dd / capital) * 100 if capital > 0 else None
@@ -255,7 +275,7 @@ def profit_distribution(trades: List[Trade], bucket_count: int = 20) -> List[His
     if not trades:
         return []
 
-    pnls = [t.pnl for t in trades]
+    pnls = [_net(t) for t in trades]
     lo, hi = min(pnls), max(pnls)
     if lo == hi:
         return [HistogramBucket(range_start=lo, range_end=hi, count=len(pnls))]
@@ -296,3 +316,173 @@ def rolling_sharpe(
         points.append(RollingSharpePoint(date=d, sharpe_ratio=_sharpe_from_returns(returns)))
 
     return points
+
+
+@dataclass(frozen=True)
+class HeatmapCell:
+    """Capital-independent slice of PerformanceMetrics — a (strategy,
+    symbol) or (strategy, market_condition) bucket has no capital of its
+    own to measure drawdown_pct/sharpe against, so those aren't included
+    here rather than showing a number that isn't meaningful."""
+
+    total_trades: int
+    win_rate: Optional[float]
+    profit_factor: Optional[float]
+    total_pnl: float
+    avg_r_multiple: Optional[float]
+
+
+def _heatmap_cell(trades: List[Trade]) -> HeatmapCell:
+    m = compute_performance_metrics(trades, capital=0)
+    return HeatmapCell(
+        total_trades=m.total_trades,
+        win_rate=m.win_rate,
+        profit_factor=m.profit_factor,
+        total_pnl=m.total_pnl,
+        avg_r_multiple=m.avg_r_multiple,
+    )
+
+
+@dataclass(frozen=True)
+class HeatmapRow:
+    row: str  # strategy_name
+    column: str  # symbol, or market_condition
+    cell: HeatmapCell
+
+
+def heatmap_by_strategy_and_symbol(trades: List[Trade]) -> List[HeatmapRow]:
+    """One cell per (strategy, symbol) pair that has at least one trade in
+    `trades` — callers pass in whatever's already filtered by date range/
+    strategy/symbol, so a strategy with no trades in the selected window
+    simply doesn't appear (no separate "is this strategy still active"
+    check needed elsewhere)."""
+    groups: Dict[tuple, List[Trade]] = defaultdict(list)
+    for t in trades:
+        if not t.strategy_name:
+            continue
+        groups[(t.strategy_name, t.symbol)].append(t)
+
+    return [
+        HeatmapRow(row=strategy, column=symbol, cell=_heatmap_cell(group))
+        for (strategy, symbol), group in groups.items()
+    ]
+
+
+def heatmap_by_strategy_and_condition(trades: List[Trade]) -> List[HeatmapRow]:
+    """Same as heatmap_by_strategy_and_symbol but bucketed by the entry-time
+    market_condition label (core/domain/market_condition.py) instead of
+    symbol. Trades without a market_condition (logged before that field
+    existed, or missing entry indicators) are excluded rather than lumped
+    into a misleading "unknown" bucket."""
+    groups: Dict[tuple, List[Trade]] = defaultdict(list)
+    for t in trades:
+        if not t.strategy_name or not t.market_condition:
+            continue
+        groups[(t.strategy_name, t.market_condition)].append(t)
+
+    return [
+        HeatmapRow(row=strategy, column=condition, cell=_heatmap_cell(group))
+        for (strategy, condition), group in groups.items()
+    ]
+
+
+@dataclass(frozen=True)
+class StrategyTrendPoint:
+    strategy_name: str
+    bucket: date
+    trades: int
+    win_rate: Optional[float]
+    profit_factor: Optional[float]
+    cumulative_pnl: float  # running total within this strategy's own series only
+
+
+def strategy_trend(trades: List[Trade], bucket: Bucket = "weekly") -> List[StrategyTrendPoint]:
+    """Per-strategy win rate/profit factor/cumulative P&L, one point per
+    bucket per strategy — same cadence as equity_curve/pnl_by_period, but
+    split by strategy instead of summed across all of them. This is what
+    answers "is this strategy still working, or decaying" at a glance,
+    which the single blended equity curve can't show. cumulative_pnl
+    accumulates within each strategy's own series, so a strategy that
+    started mid-window still reads as its own curve from zero rather than
+    inheriting an offset from strategies that traded before it existed."""
+    by_strategy: Dict[str, List[Trade]] = defaultdict(list)
+    for t in trades:
+        if t.strategy_name:
+            by_strategy[t.strategy_name].append(t)
+
+    points: List[StrategyTrendPoint] = []
+    for strategy, strategy_trades in by_strategy.items():
+        buckets: Dict[date, List[Trade]] = defaultdict(list)
+        for t in strategy_trades:
+            buckets[_bucket_start(t.closed_at.date(), bucket)].append(t)
+
+        cumulative = 0.0
+        for b in sorted(buckets.keys()):
+            m = compute_performance_metrics(buckets[b], capital=0)
+            cumulative += m.total_pnl
+            points.append(
+                StrategyTrendPoint(
+                    strategy_name=strategy,
+                    bucket=b,
+                    trades=m.total_trades,
+                    win_rate=m.win_rate,
+                    profit_factor=m.profit_factor,
+                    cumulative_pnl=cumulative,
+                )
+            )
+
+    return points
+
+
+@dataclass(frozen=True)
+class CorrelationPair:
+    strategy_a: str
+    strategy_b: str
+    # Pearson correlation of daily P&L between the two strategies over
+    # every day either one traded (0-filled on days one was silent, same
+    # convention as _daily_pnl); None if fewer than 2 overlapping days or
+    # either strategy's daily P&L never varies (correlation undefined).
+    correlation: Optional[float]
+
+
+def _pearson(xs: List[float], ys: List[float]) -> Optional[float]:
+    n = len(xs)
+    if n < 2:
+        return None
+
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    if var_x == 0 or var_y == 0:
+        return None
+
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    return cov / math.sqrt(var_x * var_y)
+
+
+def strategy_correlation(trades: List[Trade]) -> List[CorrelationPair]:
+    """Pairwise correlation of daily P&L between every pair of strategies
+    in `trades` — surfaces strategies that look diversified by name but
+    actually win and lose on the same days (no real capital-allocation
+    benefit to running both). One pair per unique (strategy_a, strategy_b)
+    combination, alphabetically ordered so the frontend doesn't need to
+    dedupe A×B vs B×A."""
+    daily_by_strategy: Dict[str, Dict[date, float]] = defaultdict(lambda: defaultdict(float))
+    for t in trades:
+        if not t.strategy_name:
+            continue
+        daily_by_strategy[t.strategy_name][t.closed_at.date()] += _net(t)
+
+    strategies = sorted(daily_by_strategy.keys())
+    all_days = sorted({d for daily in daily_by_strategy.values() for d in daily})
+
+    series = {s: [daily_by_strategy[s].get(d, 0.0) for d in all_days] for s in strategies}
+
+    pairs: List[CorrelationPair] = []
+    for i, a in enumerate(strategies):
+        for b in strategies[i + 1 :]:
+            pairs.append(
+                CorrelationPair(strategy_a=a, strategy_b=b, correlation=_pearson(series[a], series[b]))
+            )
+    return pairs

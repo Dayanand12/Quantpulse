@@ -121,6 +121,14 @@ class Trade:
     # reports don't need to recompute it from the raw values.
     market_condition: Optional[str] = None
 
+    # Brokerage + STT + exchange/SEBI charges + stamp duty + GST for this
+    # trade's round trip (see core/domain/charges.py). `pnl` above stays the
+    # raw price-difference figure; `charges`/`net_pnl` are what the
+    # analytics dashboard actually reports as "realized profit". None only
+    # for trades closed before this field existed and never backfilled.
+    charges: Optional[float] = None
+    net_pnl: Optional[float] = None
+
 
 @dataclass(frozen=True)
 class RejectedEntry:

@@ -43,7 +43,7 @@ def test_screen_excludes_symbol_failing_stage2():
 def test_screen_excludes_symbol_failing_stage3():
     strategy = ORBReversalStrategy()
     row = qualifying_row()
-    row["distance_to_or_low"] = 5.0  # fails stage3 (0 <= distance <= 0.2)
+    row["distance_to_or_low"] = 5.0  # fails stage3 (-2.0 <= distance <= 2.0)
     snapshot = {"RELIANCE": row}
 
     assert strategy.screen(snapshot, ["RELIANCE"]) == []

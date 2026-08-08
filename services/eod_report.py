@@ -27,7 +27,7 @@ from infrastructure.persistence.sql_trade_repository import record_to_trade
 
 TRADE_COLUMNS = [
     "Time", "Deployment ID", "Strategy", "Symbol", "Side",
-    "Qty", "Entry", "Exit", "PnL", "PnL %", "Initial SL",
+    "Qty", "Entry", "Exit", "PnL", "Charges", "Net PnL", "PnL %", "Initial SL",
     "Market Condition", "Entry RSI", "Entry ADX", "Entry ATR %",
     "Entry VWAP", "Entry Volume Ratio",
 ]
@@ -67,6 +67,8 @@ def _trade_row(trade: Trade) -> dict:
         "Entry": trade.entry_price,
         "Exit": trade.exit_price,
         "PnL": round(trade.pnl, 2),
+        "Charges": round(trade.charges, 2) if trade.charges is not None else None,
+        "Net PnL": round(trade.net_pnl, 2) if trade.net_pnl is not None else round(trade.pnl, 2),
         "PnL %": pnl_pct,
         "Initial SL": trade.initial_stop_loss,
         "Market Condition": trade.market_condition,
@@ -89,6 +91,8 @@ def _metrics_row(label: str, capital: float, m: PerformanceMetrics) -> dict:
         "Profit Factor": round(m.profit_factor, 2) if m.profit_factor is not None else None,
         "Gross Profit": round(m.gross_profit, 2),
         "Gross Loss": round(m.gross_loss, 2),
+        "Gross P&L (before charges)": round(m.gross_total_pnl, 2),
+        "Total Charges": round(m.total_charges, 2),
         "Total P&L": round(m.total_pnl, 2),
         "Max Drawdown": round(m.max_drawdown, 2),
         "Max Drawdown %": round(m.max_drawdown_pct, 2) if m.max_drawdown_pct is not None else None,

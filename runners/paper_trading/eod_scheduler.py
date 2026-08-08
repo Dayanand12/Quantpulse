@@ -18,6 +18,7 @@ from datetime import datetime
 from sqlalchemy.orm import sessionmaker
 
 from services.eod_report import generate_eod_report
+from services.db_backup import backup_database_to_drive
 from core.application.interfaces.deployment_repository import IDeploymentRepository
 from infrastructure.logging.logger import get_logger
 
@@ -36,6 +37,9 @@ def run_eod_scheduler(
     deployment_repository: IDeploymentRepository,
     report_time: str,
     output_dir: str,
+    database_url: str,
+    backup_dir: str,
+    backup_remote: str,
 ) -> None:
     """Blocks forever — run this in a daemon thread."""
     hour, minute = _parse_hhmm(report_time)
@@ -51,6 +55,12 @@ def run_eod_scheduler(
                 logger.info("EOD report written to %s", path)
             except Exception:
                 logger.exception("Failed to generate EOD report")
+
+            try:
+                backup_database_to_drive(database_url, backup_dir, backup_remote)
+            except Exception:
+                logger.exception("Failed to back up database to Drive")
+
             last_run_date = now.date()
 
         time.sleep(_POLL_SECONDS)

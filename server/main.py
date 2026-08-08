@@ -27,14 +27,20 @@ from services.market_analysis_engine import MarketAnalysisEngine
 from services.report_generator import generate_report
 from core.application.interfaces.trade_repository import TradeFilter
 from core.container import Container
+from core.domain.regime_classification import classify_regime, classify_screens
 from core.domain.metrics import (
     compute_performance_metrics,
     drawdown_series,
     equity_curve,
+    heatmap_by_strategy_and_condition,
+    heatmap_by_strategy_and_symbol,
     pnl_by_period,
     profit_distribution,
     rolling_sharpe,
+    strategy_correlation,
+    strategy_trend,
 )
+from core.domain.charges import ChargeConfig
 from core.domain.models import Deployment, StrategyConfig
 from core.exceptions import NotFoundError, ValidationError, register_exception_handlers
 from infrastructure.config.settings import Settings
@@ -45,6 +51,28 @@ from server.ws_manager import ConnectionManager
 
 class WatchlistUpdateRequest(BaseModel):
     symbols: List[str]
+
+
+class ChargeConfigRequest(BaseModel):
+    brokerage_pct: float = Field(ge=0)
+    brokerage_max_per_order: float = Field(ge=0)
+    stt_pct: float = Field(ge=0)
+    exchange_txn_pct: float = Field(ge=0)
+    sebi_pct: float = Field(ge=0)
+    stamp_duty_pct: float = Field(ge=0)
+    gst_pct: float = Field(ge=0)
+
+
+def _charge_config_to_dict(config: ChargeConfig) -> dict:
+    return {
+        "brokerage_pct": config.brokerage_pct,
+        "brokerage_max_per_order": config.brokerage_max_per_order,
+        "stt_pct": config.stt_pct,
+        "exchange_txn_pct": config.exchange_txn_pct,
+        "sebi_pct": config.sebi_pct,
+        "stamp_duty_pct": config.stamp_duty_pct,
+        "gst_pct": config.gst_pct,
+    }
 
 
 class StrategySourceCreateRequest(BaseModel):
@@ -227,6 +255,27 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
 
         return result
 
+    def _enrich_with_screens(entry: dict) -> dict:
+        """Adds live regime classification + Screener category membership
+        to a snapshot entry, computed from the same indicator values
+        already in it — no extra data fetch, same classify_regime() used
+        by the Market Analysis page's on-demand lookup, so the two never
+        disagree. `regime` is None (and `screens` empty) until the core
+        inputs have real values, same "not enough data yet" convention as
+        core/domain/metrics.py, rather than a misleading Range/NO TRADE
+        verdict for a symbol that's still warming up."""
+        core_fields = (entry["ltp"], entry["ema9"], entry["ema21"], entry["adx"], entry["vwap"], entry["atr_pct"])
+        regime = classify_regime(*core_fields) if all(v is not None for v in core_fields) else None
+        screens = classify_screens(
+            regime,
+            ltp=entry["ltp"],
+            vwap=entry["vwap"],
+            rsi=entry["rsi"],
+            volume_ratio=entry["volume_ratio"],
+            atr_pct=entry["atr_pct"],
+        )
+        return {**entry, "regime": regime, "screens": screens}
+
     def build_full_snapshot() -> dict:
         """Every watchlist symbol, not just the ones LiveEngine has produced
         an indicator snapshot for. A freshly-added symbol (or one still
@@ -255,7 +304,8 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 "orb_low": None,
                 "distance_to_or_low": None,
             }
-        return result
+
+        return {symbol: _enrich_with_screens(entry) for symbol, entry in result.items()}
 
     def build_live_payload():
         orb = stage_results.get("ORB", {})
@@ -415,6 +465,16 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             "drawdown": [asdict(p) for p in drawdown_series(trades, total_capital)],
             "profit_distribution": [asdict(b) for b in profit_distribution(trades)],
             "rolling_sharpe": [asdict(p) for p in rolling_sharpe(trades, total_capital)],
+            # Strategy-vs-symbol / strategy-vs-market-condition heatmaps —
+            # built from the same already-filtered `trades`, so a strategy
+            # with no trades in the selected date range/filters simply
+            # doesn't appear (see core/domain/metrics.py docstrings).
+            "heatmap_strategy_symbol": [asdict(r) for r in heatmap_by_strategy_and_symbol(trades)],
+            "heatmap_strategy_condition": [
+                asdict(r) for r in heatmap_by_strategy_and_condition(trades)
+            ],
+            "strategy_trend": [asdict(p) for p in strategy_trend(trades, timeframe)],
+            "strategy_correlation": [asdict(p) for p in strategy_correlation(trades)],
             "available_strategies": available_strategies,
             "available_symbols": available_symbols,
         }
@@ -479,7 +539,9 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 metrics = compute_performance_metrics(persisted_trades, deployment.capital)
                 entry["status"] = {
                     "available_capital": status.available_capital,
-                    "realized_pnl": sum(t.pnl for t in persisted_trades),
+                    "realized_pnl": metrics.total_pnl,
+                    "total_charges": metrics.total_charges,
+                    "gross_realized_pnl": metrics.gross_total_pnl,
                     "total_trades": len(persisted_trades),
                     "open_position_count": len(status.open_positions),
                     "win_rate": metrics.win_rate,
@@ -582,6 +644,21 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
 
         container.watchlist_repository.save_symbols(cleaned)
         return {"symbols": cleaned}
+
+    # -----------------------------
+    # REST: brokerage/tax rate card (core/domain/charges.py) — editable so
+    # realized P&L matches whatever the account is actually charged. Takes
+    # effect on the next trade closed; past trades keep whatever charges
+    # were computed at close time, never retroactively recomputed.
+    # -----------------------------
+    @app.get("/api/settings/charges")
+    def get_charge_config():
+        return _charge_config_to_dict(container.charge_config_repository.get_config())
+
+    @app.put("/api/settings/charges")
+    def update_charge_config(body: ChargeConfigRequest):
+        saved = container.charge_config_repository.save_config(ChargeConfig(**body.model_dump()))
+        return _charge_config_to_dict(saved)
 
     # -----------------------------
     # REST: market-wide ORB screener (display only, independent of deployments)

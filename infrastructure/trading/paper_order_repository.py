@@ -12,8 +12,10 @@ knowing they exist.
 import dataclasses
 from typing import List, Optional
 
+from core.application.interfaces.charge_config_repository import IChargeConfigRepository
 from core.application.interfaces.event_bus import IEventBus
 from core.application.interfaces.order_repository import IOrderRepository, ITradeRepository
+from core.domain.charges import compute_charges
 from core.domain.enums import OrderSide
 from core.domain.events import PositionClosed, PositionOpened
 from core.domain.models import Position, Trade
@@ -28,11 +30,13 @@ class PaperOrderRepository(IOrderRepository, ITradeRepository):
         event_bus: IEventBus,
         deployment_id: Optional[str] = None,
         strategy_name: Optional[str] = None,
+        charge_config_repository: Optional[IChargeConfigRepository] = None,
     ) -> None:
         self._broker = broker
         self._event_bus = event_bus
         self._deployment_id = deployment_id
         self._strategy_name = strategy_name
+        self._charge_config_repository = charge_config_repository
 
     def open_position(
         self,
@@ -58,8 +62,26 @@ class PaperOrderRepository(IOrderRepository, ITradeRepository):
             return None  # symbol had no open position; PaperBroker no-op'd
 
         trade = trade_from_raw(self._broker.trade_log[-1])
+
+        charges = None
+        net_pnl = None
+        if self._charge_config_repository is not None:
+            breakdown = compute_charges(
+                entry_price=trade.entry_price,
+                exit_price=trade.exit_price,
+                quantity=trade.quantity,
+                side=trade.side,
+                config=self._charge_config_repository.get_config(),
+            )
+            charges = breakdown.total
+            net_pnl = trade.pnl - charges
+
         trade = dataclasses.replace(
-            trade, deployment_id=self._deployment_id, strategy_name=self._strategy_name
+            trade,
+            deployment_id=self._deployment_id,
+            strategy_name=self._strategy_name,
+            charges=charges,
+            net_pnl=net_pnl,
         )
         self._event_bus.publish(PositionClosed(trade=trade))
         return trade

@@ -42,6 +42,9 @@ fut_data_new/
 # Generated reports (market-analysis + EOD trades/metrics)
 reports/
 
+# Local SQLite snapshots, mirrored to gdrivebackup: (see services/db_backup.py)
+backups/
+
 # -------------------------
 # Python
 # -------------------------
@@ -63,6 +66,7 @@ ENV/
 
 # SQLite databases
 *.db
+*.bak
 
 # Python packaging
 build/

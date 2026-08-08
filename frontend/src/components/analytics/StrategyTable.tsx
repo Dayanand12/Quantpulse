@@ -103,7 +103,19 @@ const TABLE_COLUMNS: ColumnConfig[] = [
 
 type SortDir = "asc" | "desc"
 
-export function StrategyTable({ rows }: { rows: StrategyBreakdown[] }) {
+interface StrategyTableProps {
+  rows: StrategyBreakdown[]
+  title?: string
+  firstColumnLabel?: string
+  searchPlaceholder?: string
+}
+
+export function StrategyTable({
+  rows,
+  title = "Strategy Comparison",
+  firstColumnLabel = "Strategy",
+  searchPlaceholder = "Search strategies…",
+}: StrategyTableProps) {
   const [search, setSearch] = useState("")
   const [sortKey, setSortKey] = useState("total_pnl")
   const [sortDir, setSortDir] = useState<SortDir>("desc")
@@ -145,12 +157,12 @@ export function StrategyTable({ rows }: { rows: StrategyBreakdown[] }) {
   return (
     <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] p-5 backdrop-blur-sm">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-[var(--ink-primary)]">Strategy Comparison</h3>
+        <h3 className="text-sm font-semibold text-[var(--ink-primary)]">{title}</h3>
         <div className="relative">
           <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ink-muted)]" />
           <input
             type="text"
-            placeholder="Search strategies…"
+            placeholder={searchPlaceholder}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="rounded-xl border border-[var(--glass-border)] bg-[var(--surface-2)] py-2 pl-9 pr-3 text-sm text-[var(--ink-primary)] outline-none transition-colors focus:border-[var(--accent)]"
@@ -173,7 +185,7 @@ export function StrategyTable({ rows }: { rows: StrategyBreakdown[] }) {
                       col.align === "right" ? "text-right" : "text-left"
                     }`}
                   >
-                    {col.label}
+                    {col.key === "strategy_name" ? firstColumnLabel : col.label}
                     {sortKey === col.key && (
                       <span className="ml-1">{sortDir === "asc" ? "↑" : "↓"}</span>
                     )}

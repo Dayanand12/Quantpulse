@@ -20,6 +20,7 @@ from typing import Optional
 import polars as pl
 
 from core.application.interfaces.regime_call_repository import IRegimeCallRepository, RegimeCall
+from core.domain.regime_classification import classify_regime
 from indicators import IndicatorCalculator
 from infrastructure.logging.logger import get_logger
 
@@ -65,96 +66,6 @@ def _clean(value):
     except (TypeError, ValueError):
         return None
     return None if math.isnan(f) else f
-
-
-def _classify(ltp, ema9, ema21, adx, vwap, atr_pct):
-    """Same regime/trend/volatility heuristic this engine always used,
-    plus a side-aware decision — factored out so analyze() calls it once,
-    not inline.
-
-    decision/suggested_side are BUY-or-SELL aware (not SELL-only like the
-    original ORB-era version): the app now runs both BUY-side (EMA
-    Crossover) and SELL-side (ORB Reversal) strategies, so "what to do
-    today" has to reflect whichever side the regime actually favors, not
-    always assume short.
-    """
-    ema9 = ema9 or 0
-    ema21 = ema21 or 0
-    adx = adx or 0
-    vwap = vwap or 0
-    atr_pct = atr_pct or 0
-
-    if ema9 > ema21 and ltp > vwap:
-        regime = "Bullish Trend"
-    elif ema9 < ema21 and ltp < vwap:
-        regime = "Bearish Trend"
-    elif adx < 18:
-        regime = "Range"
-    else:
-        regime = "Transition"
-
-    if adx > 25:
-        trend_strength = "Strong"
-    elif adx > 20:
-        trend_strength = "Moderate"
-    else:
-        trend_strength = "Weak"
-
-    if atr_pct > 1.2:
-        volatility_state = "High Expansion"
-    elif atr_pct < 0.5:
-        volatility_state = "Compressed"
-    else:
-        volatility_state = "Normal"
-
-    score = 0
-    if regime in ("Bullish Trend", "Bearish Trend"):
-        score += 3
-    elif regime == "Range":
-        score += 2
-
-    if trend_strength == "Strong":
-        score += 2
-    elif trend_strength == "Moderate":
-        score += 1
-
-    if volatility_state == "Normal":
-        score += 2
-    elif volatility_state == "Compressed":
-        score += 1
-
-    if volatility_state == "High Expansion" or score < 4 or regime not in (
-        "Bullish Trend", "Bearish Trend"
-    ):
-        decision = "NO TRADE"
-        suggested_side = None
-    else:
-        side = "BUY" if regime == "Bullish Trend" else "SELL"
-        size = "NORMAL SIZE" if score >= 7 else "REDUCED SIZE"
-        decision = f"{side} {size}"
-        suggested_side = side
-
-    return {
-        "regime": regime,
-        "trend_strength": trend_strength,
-        "volatility_state": volatility_state,
-        "confidence_score": score,
-        "decision": decision,
-        "suggested_side": suggested_side,
-        "summary": _summary(regime, trend_strength, volatility_state, decision, suggested_side),
-    }
-
-
-def _summary(regime, trend_strength, volatility_state, decision, suggested_side):
-    base = f"{trend_strength} {regime.lower()}, {volatility_state.lower()} volatility."
-
-    if suggested_side is None:
-        action = "Conditions don't favor either side right now — sit out or wait for a clearer setup."
-    else:
-        size = "full size" if "NORMAL" in decision else "reduced size"
-        action = f"Favors {suggested_side}-side strategies today, at {size}."
-
-    return f"{base} {action}"
 
 
 class MarketAnalysisEngine:
@@ -267,7 +178,7 @@ class MarketAnalysisEngine:
         # regime_calls.logged_at gets compared against later.
         logged_at = as_of_ist.replace(tzinfo=None) if as_of_ist else None
 
-        classification = _classify(ltp, ema9, ema21, adx, vwap, atr_pct)
+        classification = classify_regime(ltp, ema9, ema21, adx, vwap, atr_pct)
         accuracy = self._log_and_score_accuracy(symbol, logged_at, ltp, classification)
 
         return {

@@ -72,10 +72,10 @@ def test_filters_by_symbol(tmp_path):
 
 def test_filters_by_date_range_inclusive(tmp_path):
     session_factory, repo = make_repo(tmp_path)
-    add_trade(session_factory, closed_at=dt.datetime(2025, 12, 31, 23, 59))
-    add_trade(session_factory, closed_at=dt.datetime(2026, 1, 1, 0, 0))
+    add_trade(session_factory, closed_at=dt.datetime(2025, 12, 31, 15, 0))
+    add_trade(session_factory, closed_at=dt.datetime(2026, 1, 1, 9, 20))
     add_trade(session_factory, closed_at=dt.datetime(2026, 1, 5, 12, 0))
-    add_trade(session_factory, closed_at=dt.datetime(2026, 1, 6, 0, 0))
+    add_trade(session_factory, closed_at=dt.datetime(2026, 1, 6, 9, 20))
 
     trades = repo.list_trades(
         TradeFilter(date_from=dt.date(2026, 1, 1), date_to=dt.date(2026, 1, 5))
@@ -83,6 +83,24 @@ def test_filters_by_date_range_inclusive(tmp_path):
 
     assert len(trades) == 2
     assert all(dt.date(2026, 1, 1) <= t.closed_at.date() <= dt.date(2026, 1, 5) for t in trades)
+
+
+def test_date_range_excludes_trades_outside_market_hours_on_boundary_days(tmp_path):
+    # date_from/date_to mean "that trading day" (09:15-15:30), not the
+    # calendar day — a stray midnight timestamp on the boundary date must
+    # not leak into a single-day filter.
+    session_factory, repo = make_repo(tmp_path)
+    add_trade(session_factory, closed_at=dt.datetime(2026, 1, 5, 0, 0))  # before market open
+    add_trade(session_factory, closed_at=dt.datetime(2026, 1, 5, 9, 15))  # exactly market open
+    add_trade(session_factory, closed_at=dt.datetime(2026, 1, 5, 15, 30))  # exactly market close
+    add_trade(session_factory, closed_at=dt.datetime(2026, 1, 5, 23, 59))  # after market close
+
+    trades = repo.list_trades(
+        TradeFilter(date_from=dt.date(2026, 1, 5), date_to=dt.date(2026, 1, 5))
+    )
+
+    assert len(trades) == 2
+    assert {t.closed_at.time() for t in trades} == {dt.time(9, 15), dt.time(15, 30)}
 
 
 def test_maps_all_fields_correctly(tmp_path):

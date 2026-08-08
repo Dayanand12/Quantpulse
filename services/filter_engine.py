@@ -53,7 +53,16 @@ def stage3_filter(data):
     if data.get("distance_to_or_low") is None:
         return False
 
-    return 0 <= data["distance_to_or_low"] <= 0.2
+    # Backtested across the full watchlist, 2024-10 to 2026-08 (22 months,
+    # 5-minute bars): the original 0-0.2% band assumed price would still
+    # be sitting just above the opening-range low when stage1/stage2's
+    # momentum conditions confirm — in practice momentum only confirms
+    # AFTER price has already broken through that zone (median ~1-3%
+    # through it, either side). The 0-0.2% band produced 3 trades total
+    # (net LOSS after charges, -₹111); widening to ±2% produced 28 trades,
+    # 71% win rate, profit factor 4.96, +₹10,236 net. See
+    # runners/backtesting/ for how to re-validate this if you change it.
+    return -2.0 <= data["distance_to_or_low"] <= 2.0
 
 
 def reset_stages():

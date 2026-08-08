@@ -1,3 +1,23 @@
+// Live regime verdict for one symbol, from core/domain/regime_classification.py
+// — same classifier the Market Analysis page's on-demand lookup uses, run
+// here on every watchlist symbol every broadcast tick. null until the
+// symbol has real values for every input (still warming up).
+export interface RegimeClassification {
+  regime: string
+  trend_strength: string
+  volatility_state: string
+  confidence_score: number
+  decision: string
+  suggested_side: "BUY" | "SELL" | null
+  summary: string
+}
+
+// Screener category membership — independent of `regime` (see
+// classify_screens' per-check None guards), a symbol can be in zero, one,
+// or several of these at once. Values are plain strings, not a union,
+// since the category list lives server-side in regime_classification.py.
+export type Screen = string
+
 export interface SnapshotEntry {
   ltp: number | null
   ema5: number | null
@@ -10,6 +30,8 @@ export interface SnapshotEntry {
   volume_ratio: number | null
   orb_low: number | null
   distance_to_or_low: number | null
+  regime: RegimeClassification | null
+  screens: Screen[]
 }
 
 export type Snapshot = Record<string, SnapshotEntry>
@@ -35,6 +57,12 @@ export interface Trade {
   side: "BUY" | "SELL"
   qty: number
   pnl: number
+  // Brokerage + STT + exchange/SEBI charges + stamp duty + GST for this
+  // trade's round trip (core/domain/charges.py), and pnl minus that —
+  // null only for a trade closed before charges existed and never
+  // backfilled.
+  charges: number | null
+  net_pnl: number | null
   deployment_id?: string
   strategy_name?: string
 }
@@ -89,6 +117,7 @@ export interface ScreenerRow {
   atr_pct: number | null
   orb_low: number | null
   distance_to_or_low: number | null
+  screens: Screen[]
 }
 
 export interface MarketAnalysis {
@@ -156,7 +185,9 @@ export interface RejectedEntry {
 
 export interface DeploymentStatus {
   available_capital: number
-  realized_pnl: number
+  realized_pnl: number // net of charges — see core/domain/charges.py
+  total_charges: number
+  gross_realized_pnl: number // before charges, for comparison against realized_pnl
   total_trades: number
   open_position_count: number
   win_rate: number | null
@@ -231,13 +262,28 @@ export interface PerformanceMetrics {
   profit_factor: number | null
   gross_profit: number
   gross_loss: number
-  total_pnl: number
+  total_pnl: number // net of charges — "realized profit"
+  total_charges: number
+  gross_total_pnl: number // before charges, for comparison against total_pnl
   avg_win: number | null
   avg_loss: number | null
   max_drawdown: number
   max_drawdown_pct: number | null
   avg_r_multiple: number | null
   sharpe_ratio: number | null
+}
+
+// The editable brokerage/tax rate card — field names mirror
+// core/domain/charges.py::ChargeConfig exactly. Every *_pct is a fraction
+// (0.0003, not 0.03), matching the backend convention.
+export interface ChargeConfig {
+  brokerage_pct: number
+  brokerage_max_per_order: number
+  stt_pct: number
+  exchange_txn_pct: number
+  sebi_pct: number
+  stamp_duty_pct: number
+  gst_pct: number
 }
 
 export interface StrategyBreakdown {
@@ -284,6 +330,44 @@ export interface AnalyticsFilters {
   timeframe: Timeframe
 }
 
+// Capital-independent subset of PerformanceMetrics — a (strategy, symbol)
+// or (strategy, market_condition) bucket has no capital pool of its own,
+// so drawdown_pct/sharpe aren't included (see core/domain/metrics.py's
+// HeatmapCell).
+export interface HeatmapCellData {
+  total_trades: number
+  win_rate: number | null
+  profit_factor: number | null
+  total_pnl: number
+  avg_r_multiple: number | null
+}
+
+export interface HeatmapRow {
+  row: string // strategy_name
+  column: string // symbol, or market_condition label
+  cell: HeatmapCellData
+}
+
+// One point per (strategy, bucket) — cumulative_pnl accumulates within
+// that strategy's own series only, not across strategies (see
+// core/domain/metrics.py::strategy_trend).
+export interface StrategyTrendPoint {
+  strategy_name: string
+  bucket: string // ISO date
+  trades: number
+  win_rate: number | null
+  profit_factor: number | null
+  cumulative_pnl: number
+}
+
+// Pearson correlation of daily P&L between a pair of strategies. One row
+// per unique pair (alphabetically ordered a/b, no A×B + B×A duplicates).
+export interface CorrelationPair {
+  strategy_a: string
+  strategy_b: string
+  correlation: number | null
+}
+
 export interface AnalyticsSummary {
   overall: PerformanceMetrics
   by_strategy: StrategyBreakdown[]
@@ -292,6 +376,10 @@ export interface AnalyticsSummary {
   drawdown: DrawdownPoint[]
   profit_distribution: HistogramBucket[]
   rolling_sharpe: RollingSharpePoint[]
+  heatmap_strategy_symbol: HeatmapRow[]
+  heatmap_strategy_condition: HeatmapRow[]
+  strategy_trend: StrategyTrendPoint[]
+  strategy_correlation: CorrelationPair[]
   available_strategies: string[]
   available_symbols: string[]
 }
