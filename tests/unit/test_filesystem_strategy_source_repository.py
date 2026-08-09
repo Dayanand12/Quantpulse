@@ -86,3 +86,21 @@ def test_get_source_raises_not_found_for_unknown_file(tmp_path):
 
     with pytest.raises(NotFoundError):
         repo.get_source("does_not_exist")
+
+
+def test_delete_source_removes_the_file(tmp_path):
+    repo = make_repo(tmp_path)
+    repo.create_source("my_strategy", VALID_SOURCE)
+
+    repo.delete_source("my_strategy")
+
+    assert "my_strategy" not in repo.list_files()
+    with pytest.raises(NotFoundError):
+        repo.get_source("my_strategy")
+
+
+def test_delete_source_raises_not_found_for_unknown_file(tmp_path):
+    repo = make_repo(tmp_path)
+
+    with pytest.raises(NotFoundError):
+        repo.delete_source("does_not_exist")

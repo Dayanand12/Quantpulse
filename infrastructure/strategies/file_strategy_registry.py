@@ -15,6 +15,7 @@ be in the real project's strategies/ folder.
 
 import importlib.util
 import inspect
+import logging
 import sys
 import uuid
 from pathlib import Path
@@ -24,6 +25,8 @@ import strategies as strategies_package
 from core.application.interfaces.strategy import IStrategy
 from core.application.interfaces.strategy_registry import IStrategyRegistry
 from core.exceptions import NotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class FileStrategyRegistry(IStrategyRegistry):
@@ -37,23 +40,35 @@ class FileStrategyRegistry(IStrategyRegistry):
             if path.stem == "__init__":
                 continue
 
-            # Unique synthetic module name per load — avoids clashing with
-            # the real `strategies.*` package when scanning a different
-            # (e.g. test) directory.
-            module_name = f"_strategy_registry_{uuid.uuid4().hex}"
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
+            # A broken/WIP strategy file (bad syntax, an invalid
+            # conditions.json — see core/domain/strategy_conditions.py)
+            # must never take every OTHER strategy down with it, since
+            # this registry backs live/paper trading (core/container.py):
+            # one bad backtest-only experiment can't be allowed to crash
+            # every already-deployed strategy's startup.
+            try:
+                self._load_one(path)
+            except Exception as e:
+                logger.warning("Skipping strategy file %s: %s", path.name, e)
 
-            for _, obj in inspect.getmembers(module, inspect.isclass):
-                if obj is IStrategy or not issubclass(obj, IStrategy):
-                    continue
-                if obj.__module__ != module_name:
-                    continue  # only classes defined here, not ones merely imported into it
+    def _load_one(self, path: Path) -> None:
+        # Unique synthetic module name per load — avoids clashing with
+        # the real `strategies.*` package when scanning a different
+        # (e.g. test) directory.
+        module_name = f"_strategy_registry_{uuid.uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
 
-                instance = obj()
-                self._strategies[instance.name] = instance
+        for _, obj in inspect.getmembers(module, inspect.isclass):
+            if obj is IStrategy or not issubclass(obj, IStrategy):
+                continue
+            if obj.__module__ != module_name:
+                continue  # only classes defined here, not ones merely imported into it
+
+            instance = obj()
+            self._strategies[instance.name] = instance
 
     def list_strategies(self) -> List[IStrategy]:
         return list(self._strategies.values())

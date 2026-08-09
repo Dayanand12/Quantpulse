@@ -32,7 +32,11 @@ from runners.backtesting.engine import run_backtest
 from runners.backtesting.historical_loader import load_equity_csv
 from runners.backtesting.parameter_sweep import build_config_grid, rank_by, sweep_parameters
 from runners.backtesting.report import write_backtest_report, write_sweep_report
-from runners.backtesting.result_persistence import save_backtest_result, symbols_identity
+from runners.backtesting.result_persistence import (
+    required_dynamic_indicators,
+    save_backtest_result,
+    symbols_identity,
+)
 from runners.backtesting.strategy_resolver import UnknownStrategyError, resolve_strategy_class
 from runners.backtesting.watchlist import get_tradeable_watchlist_symbols
 
@@ -145,6 +149,8 @@ def main() -> None:
         print(e, file=sys.stderr)
         sys.exit(1)
 
+    extra_indicators = required_dynamic_indicators(args.strategy)
+
     base_config = StrategyConfig(
         quantity=args.quantity,
         stoploss_pct=_parse_floats(args.stoploss)[0],
@@ -177,6 +183,7 @@ def main() -> None:
         results = sweep_parameters(
             strategy_cls, symbol_csv_pairs, grid, args.capital, charge_config,
             date_from=requested_date_from, date_to=requested_date_to,
+            extra_indicators=extra_indicators,
         )
         ranked = rank_by(results, args.rank_by)
 
@@ -229,6 +236,7 @@ def main() -> None:
         trades = run_backtest(
             strategy_instance, symbol, df, base_config, charge_config=charge_config,
             date_from=requested_date_from, date_to=requested_date_to,
+            extra_indicators=extra_indicators,
         )
         all_trades.extend(trades)
         per_symbol_counts.append((symbol, len(trades)))

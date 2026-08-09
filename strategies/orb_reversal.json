@@ -1,0 +1,26 @@
+{
+  "parameters": {
+    "stage1_rsi_max": 48,
+    "stage2_volume_ratio_min": 1.7,
+    "stage2_atr_pct_min": 0.8,
+    "stage2_adx_min": 22,
+    "stage3_distance_to_or_low_min": -2.0,
+    "stage3_distance_to_or_low_max": 2.0
+  },
+  "stages": {
+    "stage1": [
+      { "left": "ltp", "op": "<", "right": { "field": "vwap" } },
+      { "left": "ema9", "op": "<", "right": { "field": "ema21" } },
+      { "left": "rsi", "op": "<", "right": { "param": "stage1_rsi_max" } }
+    ],
+    "stage2": [
+      { "left": "volume_ratio", "op": ">=", "right": { "param": "stage2_volume_ratio_min" } },
+      { "left": "atr_pct", "op": ">=", "right": { "param": "stage2_atr_pct_min" } },
+      { "left": "adx", "op": ">=", "right": { "param": "stage2_adx_min" } }
+    ],
+    "stage3": [
+      { "left": "distance_to_or_low", "op": ">=", "right": { "param": "stage3_distance_to_or_low_min" } },
+      { "left": "distance_to_or_low", "op": "<=", "right": { "param": "stage3_distance_to_or_low_max" } }
+    ]
+  }
+}

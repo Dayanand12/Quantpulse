@@ -14,9 +14,12 @@ live state) so timeframe bucketing is guaranteed identical to live.
 """
 
 import datetime as dt
+from typing import List, Optional
 
 import polars as pl
 
+from core.domain.indicator_registry import IndicatorSpec
+from core.domain.indicator_registry import compute_all as compute_dynamic_indicators
 from indicators import IndicatorCalculator
 from runners.paper_trading.live_engine import LiveEngine
 
@@ -34,26 +37,46 @@ _VOLUME_RATIO_WINDOW = 20
 
 
 def _opening_range(base_df: pl.DataFrame) -> pl.DataFrame:
-    """One row per session date: that day's OR low (min low, 9:15-9:30 on
-    the 1-minute base). Distance-to-OR-low is only meaningful once the OR
-    window itself has fully elapsed (matches live_engine.py's `locked`
-    flag, which flips true only after a candle later than 9:30 arrives)."""
+    """One row per session date: that day's OR low/high (min low / max
+    high, 9:15-9:30 on the 1-minute base). Distance-to-OR-low and orb_high
+    are only meaningful once the OR window itself has fully elapsed
+    (matches live_engine.py's `locked` flag, which flips true only after a
+    candle later than 9:30 arrives) — masked to None before that in
+    build_snapshot_series below, so a strategy can never "see" the
+    session's final OR high/low before it's actually finished forming
+    (this whole aggregate is computed as one batch over the full 9:15-9:30
+    window per day, so without that masking a bar from e.g. 9:20 would
+    otherwise leak the 9:30 OR value — impossible live, where it's only
+    known incrementally as candles actually arrive)."""
     or_window = base_df.filter(
         (pl.col("date").dt.time() >= _OR_START) & (pl.col("date").dt.time() <= _OR_END)
     )
     return (
         or_window.group_by(pl.col("date").dt.date().alias("session_date"))
-        .agg(pl.col("low").min().alias("orb_low"))
+        .agg(pl.col("low").min().alias("orb_low"), pl.col("high").max().alias("orb_high"))
     )
 
 
-def build_snapshot_series(base_df: pl.DataFrame, timeframe_minutes: int) -> pl.DataFrame:
+def build_snapshot_series(
+    base_df: pl.DataFrame,
+    timeframe_minutes: int,
+    extra_indicators: Optional[List[IndicatorSpec]] = None,
+) -> pl.DataFrame:
     """base_df: 1-minute OHLCV (see historical_loader.load_equity_csv).
     Returns one row per bar at `timeframe_minutes` resolution, columns
     matching LiveEngine.get_snapshot()'s per-symbol dict exactly: date,
     ltp, ema5, ema9, ema21, rsi, adx, atr_pct, vwap, volume_ratio, orb_low,
     distance_to_or_low. Rows before _MIN_BARS warm-up are dropped, same as
-    live (a strategy never sees a snapshot for those)."""
+    live (a strategy never sees a snapshot for those).
+
+    extra_indicators: any additional dynamically-requested indicators
+    (core/domain/indicator_registry.py — e.g. a strategy's
+    conditions.json asking for {"indicator": "ema", "params": {"period":
+    20}}), computed alongside the always-available set above and added
+    as extra columns keyed by their canonical name (e.g. "ema_20"). Never
+    changes the fixed set's own values — purely additive."""
+    extra_indicators = extra_indicators or []
+    extra_keys = [spec.key for spec in extra_indicators]
 
     or_by_day = _opening_range(base_df)
 
@@ -62,7 +85,7 @@ def build_snapshot_series(base_df: pl.DataFrame, timeframe_minutes: int) -> pl.D
         return tf_df.clear().with_columns(
             pl.lit(None, dtype=pl.Float64).alias(c)
             for c in ("ltp", "ema5", "ema9", "ema21", "rsi", "adx", "atr_pct", "vwap",
-                      "volume_ratio", "orb_low", "distance_to_or_low")
+                      "volume_ratio", "orb_low", "orb_high", "distance_to_or_low", *extra_keys)
         )
 
     ema5 = IndicatorCalculator.ema(tf_df, period=5)
@@ -74,6 +97,11 @@ def build_snapshot_series(base_df: pl.DataFrame, timeframe_minutes: int) -> pl.D
 
     out = tf_df.with_columns([ema5, ema9, ema21, rsi14, adx14, atr14])
     out = out.with_columns((pl.col("ATR_14") / pl.col("close") * 100).alias("atr_pct"))
+
+    # Dynamic indicators computed on the SAME tf_df (still has close/high/
+    # low under their original OHLC names, same as every fixed indicator
+    # above needs) — before the close->ltp rename below.
+    out = compute_dynamic_indicators(extra_indicators, out)
 
     out = out.with_columns(pl.col("date").dt.date().alias("session_date"))
 
@@ -106,6 +134,14 @@ def build_snapshot_series(base_df: pl.DataFrame, timeframe_minutes: int) -> pl.D
         .otherwise(None)
         .alias("distance_to_or_low")
     )
+    # orb_high masked the same way — see _opening_range's docstring for
+    # why this can't just be the raw joined value.
+    out = out.with_columns(
+        pl.when(pl.col("date").dt.time() > _OR_END)
+        .then(pl.col("orb_high"))
+        .otherwise(None)
+        .alias("orb_high")
+    )
 
     out = out.rename({
         "close": "ltp",
@@ -123,5 +159,5 @@ def build_snapshot_series(base_df: pl.DataFrame, timeframe_minutes: int) -> pl.D
     # into IStrategy.screen()'s snapshot dict.
     return out.select(
         "date", "ltp", "high", "low", "ema5", "ema9", "ema21", "rsi", "adx", "atr_pct",
-        "vwap", "volume_ratio", "orb_low", "distance_to_or_low",
+        "vwap", "volume_ratio", "orb_low", "orb_high", "distance_to_or_low", *extra_keys,
     ).tail(out.height - _MIN_BARS + 1)

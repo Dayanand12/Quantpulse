@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { backtestApi } from "../../lib/backtestApi"
 import type { BacktestRunConfig, StrategyInfo } from "../../lib/backtestTypes"
 import type { CandleTimeframe } from "../../lib/types"
+import { StrategyParamsEditor } from "./StrategyParamsEditor"
 
 const TIMEFRAMES: CandleTimeframe[] = ["minute", "3minute", "5minute", "10minute", "15minute", "30minute"]
 
@@ -41,6 +42,10 @@ export function BacktestForm({ config, onChange, onRun, running }: BacktestFormP
   const [cloneStatus, setCloneStatus] = useState<"idle" | "cloning" | "error">("idle")
   const [cloneError, setCloneError] = useState<string | null>(null)
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteStatus, setDeleteStatus] = useState<"idle" | "deleting" | "error">("idle")
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
   function loadStrategiesAndWatchlist() {
     return Promise.all([backtestApi.strategies(), backtestApi.watchlist()]).then(([strategyList, wl]) => {
       setStrategies(strategyList)
@@ -76,6 +81,21 @@ export function BacktestForm({ config, onChange, onRun, running }: BacktestFormP
     } catch (e) {
       setCloneError(e instanceof Error ? e.message : "Failed to clone strategy.")
       setCloneStatus("error")
+    }
+  }
+
+  async function handleDelete() {
+    setDeleteStatus("deleting")
+    setDeleteError(null)
+    try {
+      await backtestApi.deleteStrategy(config.strategy)
+      const strategyList = await loadStrategiesAndWatchlist()
+      onChange({ ...config, strategy: strategyList[0]?.name ?? "" })
+      setDeleteStatus("idle")
+      setShowDeleteConfirm(false)
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Failed to delete strategy.")
+      setDeleteStatus("error")
     }
   }
 
@@ -137,6 +157,15 @@ export function BacktestForm({ config, onChange, onRun, running }: BacktestFormP
               className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm hover:bg-[var(--page)] disabled:opacity-50"
             >
               Clone
+            </button>
+            <button
+              type="button"
+              title="Delete this strategy — blocked if it's currently used by a deployment"
+              onClick={() => setShowDeleteConfirm((v) => !v)}
+              disabled={!config.strategy}
+              className="shrink-0 rounded-md border border-[var(--status-critical)]/40 bg-[var(--surface-2)] px-2.5 text-sm text-[var(--status-critical)] hover:bg-[var(--status-critical)]/10 disabled:opacity-50"
+            >
+              Delete
             </button>
           </div>
         </label>
@@ -320,6 +349,38 @@ export function BacktestForm({ config, onChange, onRun, running }: BacktestFormP
           {cloneError && <p className="mt-2 text-xs text-[var(--status-critical)]">{cloneError}</p>}
         </div>
       )}
+
+      {showDeleteConfirm && (
+        <div className="mt-4 rounded-lg border border-[var(--status-critical)]/40 bg-[var(--surface-2)] p-3">
+          <p className="mb-2 text-xs text-[var(--ink-secondary)]">
+            Permanently delete <strong>{config.strategy}</strong> — its source file, params JSON if it
+            has one, and this can't be undone. Refused if any deployment (live or paper) is currently
+            using it. Stored backtest results for it are kept, not deleted.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleDelete}
+              disabled={deleteStatus === "deleting"}
+              className="shrink-0 rounded-md bg-[var(--status-critical)] px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {deleteStatus === "deleting" ? "Deleting…" : `Yes, delete ${config.strategy}`}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowDeleteConfirm(false)
+                setDeleteError(null)
+              }}
+              className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-4 py-1.5 text-sm hover:bg-[var(--page)]"
+            >
+              Cancel
+            </button>
+          </div>
+          {deleteError && <p className="mt-2 text-xs text-[var(--status-critical)]">{deleteError}</p>}
+        </div>
+      )}
+
+      {config.strategy && <StrategyParamsEditor strategyName={config.strategy} />}
 
       <div className="mt-5 border-t border-[var(--glass-border)] pt-4">
         <span className={labelClass}>Symbols</span>

@@ -28,3 +28,10 @@ class IStrategySourceRepository(ABC):
     def create_source(self, name: str, source: str) -> None:
         """Create a new strategy file. Raises ValidationError if the name
         is invalid, already exists, or `source` doesn't compile."""
+
+    @abstractmethod
+    def delete_source(self, name: str) -> None:
+        """Delete a strategy file. Raises NotFoundError if it doesn't
+        exist. Callers are responsible for checking it isn't currently
+        deployed before calling this — this repository has no notion of
+        deployments."""

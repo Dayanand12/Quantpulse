@@ -25,3 +25,8 @@ class IBacktestResultRepository(ABC):
     @abstractmethod
     def get_result(self, result_id: int) -> Optional[BacktestResult]:
         """One stored run's full result, or None if it doesn't exist."""
+
+    @abstractmethod
+    def delete_result(self, result_id: int) -> None:
+        """Removes one stored run. A no-op if it doesn't exist — deleting
+        something already gone isn't an error."""

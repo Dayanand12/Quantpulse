@@ -111,6 +111,7 @@ class BacktestResultRecord(Base):
             "strategy_name", "symbols", "timeframe", "date_from", "date_to",
             "quantity", "stoploss_pct", "target_pct", "trailing_pct",
             "max_cycles_per_day", "start_time", "end_time", "charges_enabled",
+            "strategy_params_json",
             name="uq_backtest_results_identity",
         ),
     )
@@ -129,6 +130,12 @@ class BacktestResultRecord(Base):
     start_time: Mapped[str] = mapped_column(String(5))
     end_time: Mapped[str] = mapped_column(String(5))
     charges_enabled: Mapped[bool] = mapped_column(Boolean)
+    # Raw strategies/<name>.json content at run time (see
+    # core/domain/strategy_conditions.py) — "" for strategies not yet
+    # migrated to condition-JSON. Part of the identity: editing an
+    # indicator threshold/condition is a genuinely different test, same as
+    # editing stoploss/target already is.
+    strategy_params_json: Mapped[str] = mapped_column(Text, default="")
     result_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)

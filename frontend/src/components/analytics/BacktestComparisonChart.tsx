@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import { fmtCurrency, fmtNumber, fmtPercent } from "../../lib/format"
+import { formatStrategyParams } from "../../lib/backtestTypes"
 import type { BacktestResultSummary } from "../../lib/backtestTypes"
 import { EmptyState } from "./EmptyState"
 
@@ -14,7 +15,11 @@ const METRICS: { key: MetricKey; label: string; format: (n: number) => string }[
 ]
 
 function paramLabel(r: BacktestResultSummary): string {
-  return `SL ${r.stoploss_pct} / TP ${r.target_pct} / Trail ${r.trailing_pct}`
+  const paramsPart = formatStrategyParams(r.strategy_params_json)
+  return (
+    `${r.timeframe} · SL ${r.stoploss_pct} / TP ${r.target_pct} / Trail ${r.trailing_pct}` +
+    (paramsPart ? ` · ${paramsPart}` : "")
+  )
 }
 
 interface BacktestComparisonChartProps {

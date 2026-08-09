@@ -9,18 +9,19 @@ handled entirely by the universal SL/target/trailing machinery in
 runners/paper_trading/execution_manager.py, same as every other
 strategy — nothing here decides when to exit.
 
-Tracks each symbol's previous RSI reading on the instance (the registry
-keeps one instance alive for the process's lifetime) so screen() fires
-only on the upturn tick itself, not on every tick RSI happens to
-already be below the oversold line.
+The actual threshold/conditions (oversold_rsi, the uptrend filter, the
+RSI-turning-up crossing) live in rsi_mean_reversion.json next to this
+file, not here — see core/domain/strategy_conditions.py. Edit that JSON
+to tune this strategy; nothing in this .py file needs to change for a
+threshold tweak.
 """
 
+from pathlib import Path
 from typing import Dict, List
 
 from core.application.interfaces.strategy import IStrategy
 from core.domain.enums import OrderSide
-
-OVERSOLD_RSI = 30
+from core.domain.strategy_conditions import ConditionSet
 
 
 class RsiMeanReversionStrategy(IStrategy):
@@ -29,7 +30,7 @@ class RsiMeanReversionStrategy(IStrategy):
     side = OrderSide.BUY
 
     def __init__(self) -> None:
-        self._previous_rsi: Dict[str, float] = {}
+        self._conditions = ConditionSet.from_file(Path(__file__).with_suffix(".json"))
 
     def screen(self, snapshot: Dict[str, dict], symbols: List[str]) -> List[str]:
         candidates = []
@@ -39,21 +40,7 @@ class RsiMeanReversionStrategy(IStrategy):
             if not data:
                 continue
 
-            ltp = data.get("ltp")
-            ema21 = data.get("ema21")
-            rsi = data.get("rsi")
-            if None in (ltp, ema21, rsi):
-                continue
-
-            previous_rsi = self._previous_rsi.get(symbol)
-            self._previous_rsi[symbol] = rsi
-            if previous_rsi is None:
-                continue
-
-            uptrend = ltp > ema21
-            turning_up_from_oversold = previous_rsi <= OVERSOLD_RSI < rsi
-
-            if uptrend and turning_up_from_oversold:
+            if self._conditions.evaluate(symbol, data):
                 candidates.append(symbol)
 
         return candidates

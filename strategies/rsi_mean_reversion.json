@@ -1,0 +1,9 @@
+{
+  "parameters": {
+    "oversold_rsi": 30
+  },
+  "conditions": [
+    { "left": "ltp", "op": ">", "right": { "field": "ema21" } },
+    { "left": "rsi", "op": "crossed_above", "right": { "param": "oversold_rsi" } }
+  ]
+}

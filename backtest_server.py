@@ -34,12 +34,20 @@ from core.exceptions import ValidationError, register_exception_handlers
 from infrastructure.config.settings import get_settings
 from infrastructure.persistence.database import create_session_factory
 from infrastructure.persistence.sql_backtest_result_repository import SqlBacktestResultRepository
+from infrastructure.persistence.sql_deployment_repository import SqlDeploymentRepository
+from infrastructure.strategies.filesystem_strategy_params_repository import (
+    FilesystemStrategyParamsRepository,
+)
 from infrastructure.strategies.filesystem_strategy_source_repository import (
     FilesystemStrategySourceRepository,
 )
 from runners.backtesting.engine import run_backtest
 from runners.backtesting.historical_loader import load_equity_csv
-from runners.backtesting.result_persistence import save_backtest_result, symbols_identity
+from runners.backtesting.result_persistence import (
+    required_dynamic_indicators,
+    save_backtest_result,
+    symbols_identity,
+)
 from runners.backtesting.strategy_cloner import clone_strategy
 from runners.backtesting.strategy_resolver import (
     UnknownStrategyError,
@@ -66,6 +74,10 @@ HHMM_PATTERN = r"^([01]\d|2[0-3]):[0-5]\d$"
 class CloneStrategyRequest(BaseModel):
     base_strategy: str
     new_name: str
+
+
+class SaveStrategyParamsRequest(BaseModel):
+    raw_json: str
 
 
 class BacktestRunRequest(BaseModel):
@@ -110,6 +122,11 @@ def _result_summary(r: BacktestResult) -> dict:
         "start_time": p.start_time,
         "end_time": p.end_time,
         "charges_enabled": p.charges_enabled,
+        # "" for a strategy not migrated to condition-JSON yet (e.g.
+        # orb_reversal) — see core/domain/strategy_conditions.py. Lets the
+        # Analysis tab show/compare which indicator thresholds a given
+        # stored run actually used, not just its risk/sizing settings.
+        "strategy_params_json": p.strategy_params_json,
         "total_trades": m.get("total_trades", 0),
         "win_rate": m.get("win_rate"),
         "profit_factor": m.get("profit_factor"),
@@ -166,8 +183,12 @@ def create_app() -> FastAPI:
     app = FastAPI(title="QuantPulse Backtest API")
     settings = get_settings()
     source_repo = FilesystemStrategySourceRepository(Path(strategies_package.__path__[0]))
+    params_repo = FilesystemStrategyParamsRepository(Path(strategies_package.__path__[0]))
     session_factory = create_session_factory(settings.database_url)
     result_repo: IBacktestResultRepository = SqlBacktestResultRepository(session_factory)
+    # Read-only here — only used to block deleting a strategy that's
+    # currently wired to a deployment (live or paper), never to write.
+    deployment_repo = SqlDeploymentRepository(session_factory)
 
     app.add_middleware(
         CORSMiddleware,
@@ -206,11 +227,39 @@ def create_app() -> FastAPI:
         except UnknownStrategyError as e:
             raise ValidationError(str(e))
 
-        clone_strategy(source_repo, body.base_strategy, body.new_name)
+        clone_strategy(source_repo, body.base_strategy, body.new_name, params_repo=params_repo)
 
         cls = resolve_strategy_class(body.new_name)
         instance = cls()
         return {"name": instance.name, "display_name": instance.display_name, "side": instance.side.value}
+
+    @app.get("/api/backtest/strategies/{name}/params")
+    def get_strategy_params(name: str):
+        raw = params_repo.get_params(name)
+        return {"has_params": raw is not None, "raw_json": raw}
+
+    @app.put("/api/backtest/strategies/{name}/params")
+    def save_strategy_params(name: str, body: SaveStrategyParamsRequest):
+        params_repo.save_params(name, body.raw_json)
+        return {"raw_json": body.raw_json}
+
+    @app.delete("/api/backtest/strategies/{name}")
+    def delete_strategy(name: str):
+        deployed_by = [d.id for d in deployment_repo.list_deployments() if d.strategy_name == name]
+        if deployed_by:
+            raise ValidationError(
+                f"Can't delete {name!r} — it's used by {len(deployed_by)} deployment(s) "
+                f"(disable/remove those on the Strategies page first)."
+            )
+
+        source_repo.delete_source(name)
+        params_repo.delete_params(name)  # no-op if this strategy never had a params file
+        return {"deleted": name}
+
+    @app.delete("/api/backtest/results/{result_id}")
+    def delete_result(result_id: int):
+        result_repo.delete_result(result_id)
+        return {"deleted": result_id}
 
     @app.post("/api/backtest/run")
     def run(body: BacktestRunRequest):
@@ -236,6 +285,7 @@ def create_app() -> FastAPI:
         charge_config = ChargeConfig() if body.charges else None
         requested_date_from = _parse_date(body.date_from)
         requested_date_to = _parse_date(body.date_to)
+        extra_indicators = required_dynamic_indicators(body.strategy)
 
         all_trades: List[Trade] = []
         symbols_used = []
@@ -264,6 +314,7 @@ def create_app() -> FastAPI:
             trades = run_backtest(
                 strategy, symbol, df, config, charge_config=charge_config,
                 date_from=requested_date_from, date_to=requested_date_to,
+                extra_indicators=extra_indicators,
             )
             all_trades.extend(trades)
             symbols_used.append(symbol)

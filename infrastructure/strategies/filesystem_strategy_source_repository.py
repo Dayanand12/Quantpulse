@@ -58,3 +58,9 @@ class FilesystemStrategySourceRepository(IStrategySourceRepository):
             raise ValidationError(f"Strategy file already exists: {name}")
         self._validate_syntax(source, name)
         path.write_text(source, encoding="utf-8")
+
+    def delete_source(self, name: str) -> None:
+        path = self._path_for(name)
+        if not path.exists():
+            raise NotFoundError(f"Strategy file not found: {name}")
+        path.unlink()

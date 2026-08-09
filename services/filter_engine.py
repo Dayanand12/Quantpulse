@@ -2,67 +2,46 @@ import sys
 import os
 import time
 import datetime as dt
+from pathlib import Path
 from threading import Lock
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(ROOT_DIR, ".."))
 sys.path.append(PROJECT_ROOT)
 
+from core.domain.strategy_conditions import StagedConditionSet
 from services.state_store import stage_results
 
 stage_lock = Lock()
 
+# The actual stage1/2/3 thresholds/conditions live in strategies/
+# orb_reversal.json, not here — see core/domain/strategy_conditions.py.
+# Edit that JSON to tune this funnel (e.g. the stage3 distance-to-OR-low
+# band); nothing in this file needs to change for a threshold tweak.
+# Loaded once at import time (this module, orb_reversal.py's screen(),
+# and the Screener's own live loop below all share this one instance) —
+# same restart-to-apply convention every other strategy file already has.
+_CONDITIONS_PATH = Path(PROJECT_ROOT) / "strategies" / "orb_reversal.json"
+_conditions = StagedConditionSet.from_file(_CONDITIONS_PATH)
 
-def safe_get(data, key):
-    return data.get(key)
+# ConditionSet.evaluate() takes a symbol only to key per-symbol state for
+# crossing conditions (crossed_above/crossed_below) — stage1/2/3 below use
+# none, so this is inert; a constant placeholder keeps stage1_filter/
+# stage2_filter/stage3_filter's existing (data) -> bool signatures exactly
+# as every caller (orb_reversal.py, start_engine() below) already expects.
+_NO_CROSSING_STATE_NEEDED = "_"
 
 
 def stage1_filter(data):
-    if None in (
-        safe_get(data, "ltp"),
-        safe_get(data, "vwap"),
-        safe_get(data, "ema9"),
-        safe_get(data, "ema21"),
-        safe_get(data, "rsi")
-    ):
-        return False
-
-    return (
-        data["ltp"] < data["vwap"] and
-        data["ema9"] < data["ema21"] and
-        data["rsi"] < 48
-    )
+    return _conditions.evaluate("stage1", _NO_CROSSING_STATE_NEEDED, data)
 
 
 def stage2_filter(data):
-    if None in (
-        safe_get(data, "volume_ratio"),
-        safe_get(data, "atr_pct"),
-        safe_get(data, "adx")
-    ):
-        return False
-
-    return (
-        data["volume_ratio"] >= 1.7 and
-        data["atr_pct"] >= 0.8 and
-        data["adx"] >= 22
-    )
+    return _conditions.evaluate("stage2", _NO_CROSSING_STATE_NEEDED, data)
 
 
 def stage3_filter(data):
-    if data.get("distance_to_or_low") is None:
-        return False
-
-    # Backtested across the full watchlist, 2024-10 to 2026-08 (22 months,
-    # 5-minute bars): the original 0-0.2% band assumed price would still
-    # be sitting just above the opening-range low when stage1/stage2's
-    # momentum conditions confirm — in practice momentum only confirms
-    # AFTER price has already broken through that zone (median ~1-3%
-    # through it, either side). The 0-0.2% band produced 3 trades total
-    # (net LOSS after charges, -₹111); widening to ±2% produced 28 trades,
-    # 71% win rate, profit factor 4.96, +₹10,236 net. See
-    # runners/backtesting/ for how to re-validate this if you change it.
-    return -2.0 <= data["distance_to_or_low"] <= 2.0
+    return _conditions.evaluate("stage3", _NO_CROSSING_STATE_NEEDED, data)
 
 
 def reset_stages():

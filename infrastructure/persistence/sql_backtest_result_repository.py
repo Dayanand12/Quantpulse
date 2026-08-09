@@ -33,6 +33,7 @@ def _record_to_result(record: BacktestResultRecord) -> BacktestResult:
         start_time=record.start_time,
         end_time=record.end_time,
         charges_enabled=record.charges_enabled,
+        strategy_params_json=record.strategy_params_json,
     )
     return BacktestResult(
         id=record.id,
@@ -63,6 +64,7 @@ class SqlBacktestResultRepository(IBacktestResultRepository):
                     BacktestResultRecord.start_time == params.start_time,
                     BacktestResultRecord.end_time == params.end_time,
                     BacktestResultRecord.charges_enabled == params.charges_enabled,
+                    BacktestResultRecord.strategy_params_json == params.strategy_params_json,
                 )
             ).scalar_one_or_none()
 
@@ -92,6 +94,7 @@ class SqlBacktestResultRepository(IBacktestResultRepository):
                     start_time=params.start_time,
                     end_time=params.end_time,
                     charges_enabled=params.charges_enabled,
+                    strategy_params_json=params.strategy_params_json,
                     result_json=result_json,
                     created_at=now,
                     updated_at=now,
@@ -114,3 +117,9 @@ class SqlBacktestResultRepository(IBacktestResultRepository):
         with unit_of_work(self._session_factory) as session:
             record = session.get(BacktestResultRecord, result_id)
             return _record_to_result(record) if record else None
+
+    def delete_result(self, result_id: int) -> None:
+        with unit_of_work(self._session_factory) as session:
+            record = session.get(BacktestResultRecord, result_id)
+            if record is not None:
+                session.delete(record)

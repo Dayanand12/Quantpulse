@@ -7,16 +7,16 @@ snapshot[symbol]. Exit is handled entirely by the universal SL/target/
 trailing machinery in live/execution_manager.py, same as every other
 strategy — nothing here decides when to exit.
 
-Tracks each symbol's previous EMA reading on the instance (the registry
-keeps one instance alive for the process's lifetime) so screen() fires
-only on the crossing tick itself, not on every tick where ema5 happens to
-already be above ema9.
+The crossing condition lives in ema_crossover.json next to this file, not
+here — see core/domain/strategy_conditions.py.
 """
 
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List
 
 from core.application.interfaces.strategy import IStrategy
 from core.domain.enums import OrderSide
+from core.domain.strategy_conditions import ConditionSet
 
 
 class EmaCrossoverStrategy(IStrategy):
@@ -25,7 +25,7 @@ class EmaCrossoverStrategy(IStrategy):
     side = OrderSide.BUY
 
     def __init__(self) -> None:
-        self._previous: Dict[str, Tuple[float, float]] = {}
+        self._conditions = ConditionSet.from_file(Path(__file__).with_suffix(".json"))
 
     def screen(self, snapshot: Dict[str, dict], symbols: List[str]) -> List[str]:
         candidates = []
@@ -35,19 +35,7 @@ class EmaCrossoverStrategy(IStrategy):
             if not data:
                 continue
 
-            ema5 = data.get("ema5")
-            ema9 = data.get("ema9")
-            if ema5 is None or ema9 is None:
-                continue
-
-            previous = self._previous.get(symbol)
-            self._previous[symbol] = (ema5, ema9)
-            if previous is None:
-                continue
-
-            prev_ema5, prev_ema9 = previous
-            crossed_up = prev_ema5 <= prev_ema9 and ema5 > ema9
-            if crossed_up:
+            if self._conditions.evaluate(symbol, data):
                 candidates.append(symbol)
 
         return candidates

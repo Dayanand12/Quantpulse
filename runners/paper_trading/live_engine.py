@@ -1,5 +1,9 @@
 import polars as pl
 import datetime as dt
+from typing import List, Optional
+
+from core.domain.indicator_registry import IndicatorSpec
+from core.domain.indicator_registry import compute_all as compute_dynamic_indicators
 from indicators import IndicatorCalculator
 from runners.paper_trading.paper_broker import PaperBroker
 from runners.paper_trading.candle_builder import CandleBuilder
@@ -29,10 +33,19 @@ class LiveEngine:
     # midnight instead (see docs/plans/per-strategy-timeframes.md).
     _SESSION_OPEN_MINUTES = 9 * 60 + 15  # 09:15
 
-    def __init__(self, symbols, capital=100000):
+    def __init__(self, symbols, capital=100000, extra_indicators: Optional[List[IndicatorSpec]] = None):
         self.symbols = symbols
         self.broker = PaperBroker(capital)
         self.builder = CandleBuilder(symbols)
+        # Union of every deployed strategy's dynamically-requested
+        # indicators (core/domain/indicator_registry.py — e.g. a
+        # conditions.json asking for {"indicator": "ema", "params":
+        # {"period": 20}}), resolved once at container-build time
+        # (core/container.py) same as ExecutionManager is per deployment.
+        # Computed for every symbol regardless of which deployment
+        # actually needs it — same sharing convention the fixed
+        # ema5/ema9/ema21/etc set already uses.
+        self._extra_indicators = extra_indicators or []
 
         self.data = {
             symbol: pl.DataFrame(
@@ -229,6 +242,13 @@ class LiveEngine:
         atr14 = IndicatorCalculator.atr(df, period=14)
 
         df = df.with_columns([ema5, ema9, ema21, rsi14, adx14, atr14])
+
+        # Any indicator a deployed strategy's conditions.json declared
+        # beyond the fixed set above (core/domain/indicator_registry.py)
+        # — additive, computed on the SAME df (still has close/high/low
+        # under their original OHLC names), never touching the fixed
+        # indicators' own values.
+        df = compute_dynamic_indicators(self._extra_indicators, df)
         latest = df.row(-1, named=True)
 
         # -----------------------
@@ -269,10 +289,18 @@ class LiveEngine:
                 (latest["close"] - orb_low) / orb_low
             ) * 100
 
+        # orb_high masked until the OR window has actually locked (same
+        # 9:15-9:30 window orb_low/distance_to_or_low track) — unlike
+        # orb_low above, this field has no existing raw-before-lock
+        # consumer to stay compatible with, so it's gated correctly from
+        # the start rather than inheriting that quirk.
+        orb_high = self.or_data[symbol]["high"]
+        orb_high_ready = orb_high is not None and self.or_data[symbol]["locked"]
+
         # -----------------------
         # Save Snapshot
         # -----------------------
-        self.indicator_snapshot[symbol][timeframe] = {
+        snapshot = {
             "ltp": float(latest["close"]),
             "ema5": float(latest["EMA_5"]),
             "ema9": float(latest["EMA_9"]),
@@ -283,8 +311,14 @@ class LiveEngine:
             "vwap": float(vwap),
             "volume_ratio": float(volume_ratio),
             "orb_low": float(orb_low) if orb_low else None,
+            "orb_high": float(orb_high) if orb_high_ready else None,
             "distance_to_or_low": float(distance_to_or_low) if distance_to_or_low else None
         }
+        for spec in self._extra_indicators:
+            value = latest.get(spec.key)
+            snapshot[spec.key] = float(value) if value is not None else None
+
+        self.indicator_snapshot[symbol][timeframe] = snapshot
 
     def get_snapshot(self, timeframe="minute"):
         return {

@@ -33,6 +33,12 @@ class BacktestRunParams:
     start_time: str
     end_time: str
     charges_enabled: bool
+    # Raw content of strategies/<name>.json at run time (see
+    # core/domain/strategy_conditions.py) — "" for a strategy that hasn't
+    # been migrated to condition-JSON yet. Part of the identity so editing
+    # an indicator threshold or condition creates a new stored row, same
+    # as editing stoploss/target/etc already does.
+    strategy_params_json: str = ""
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,12 @@
+{
+  "parameters": {
+    "volume_ratio_threshold": 1.5,
+    "adx_threshold": 35
+  },
+  "conditions": [
+    { "left": "ltp", "op": "crossed_above", "right": { "field": "vwap" }, "inclusive": true },
+    { "left": "ema9", "op": ">", "right": { "field": { "indicator": "ema", "params": { "period": 20 } } } },
+    { "left": "volume_ratio", "op": ">=", "right": { "param": "volume_ratio_threshold" } },
+    { "left": "adx", "op": ">=", "right": { "param": "adx_threshold" } }
+  ]
+}

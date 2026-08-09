@@ -91,6 +91,10 @@ export interface BacktestResultSummary {
   start_time: string
   end_time: string
   charges_enabled: boolean
+  // Raw strategies/<name>.json content active for this run (see
+  // core/domain/strategy_conditions.py) — "" for a strategy not migrated
+  // to condition-JSON yet.
+  strategy_params_json: string
   total_trades: number
   win_rate: number | null
   profit_factor: number | null
@@ -98,6 +102,24 @@ export interface BacktestResultSummary {
   sharpe_ratio: number | null
   max_drawdown_pct: number | null
   created_at: string | null
+}
+
+// Compact "adx_threshold=25, volume_ratio_threshold=1.5" summary of a
+// stored result's indicator parameters, for dropdown labels/tooltips —
+// "" if the strategy has no params file or the JSON's `parameters` block
+// is empty (e.g. ema_crossover, which has no named parameters at all).
+export function formatStrategyParams(rawJson: string): string {
+  if (!rawJson) return ""
+  try {
+    const parsed = JSON.parse(rawJson) as { parameters?: Record<string, number> }
+    const params = parsed.parameters
+    if (!params || Object.keys(params).length === 0) return ""
+    return Object.entries(params)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(", ")
+  } catch {
+    return ""
+  }
 }
 
 export interface BacktestResultDetail {

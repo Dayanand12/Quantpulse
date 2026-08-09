@@ -1,5 +1,9 @@
 import datetime as dt
 
+import numpy as np
+import talib
+
+from core.domain.indicator_registry import IndicatorSpec
 from runners.paper_trading.live_engine import LiveEngine
 
 
@@ -80,3 +84,32 @@ def test_warm_start_then_live_ticks_share_the_same_naive_column():
     })
 
     assert engine.data["TCS"].height == 31
+
+
+def test_extra_indicators_are_additive_not_replacing_the_fixed_set():
+    engine = LiveEngine(["TCS"], capital=100_000, extra_indicators=[IndicatorSpec.of("ema", period=20)])
+
+    engine.warm_start("TCS", make_candles(40))
+
+    snapshot = engine.get_snapshot()
+    assert snapshot["TCS"]["ema_20"] is not None
+    assert snapshot["TCS"]["ema9"] is not None  # fixed set still there alongside it
+
+
+def test_extra_indicator_value_matches_independent_talib_calculation():
+    candles = make_candles(40)
+    engine = LiveEngine(["TCS"], capital=100_000, extra_indicators=[IndicatorSpec.of("ema", period=20)])
+
+    engine.warm_start("TCS", candles)
+
+    closes = np.array([c["close"] for c in candles])
+    independent = talib.EMA(closes, timeperiod=20)[-1]
+    assert engine.get_snapshot()["TCS"]["ema_20"] == independent
+
+
+def test_no_extra_indicators_means_no_dynamic_keys_in_snapshot():
+    engine = LiveEngine(["TCS"], capital=100_000)
+
+    engine.warm_start("TCS", make_candles(40))
+
+    assert "ema_20" not in engine.get_snapshot()["TCS"]

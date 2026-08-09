@@ -2,8 +2,10 @@ import datetime as dt
 
 import polars as pl
 
+from core.application.interfaces.strategy import IStrategy
 from core.domain.charges import ChargeConfig, compute_charges
 from core.domain.enums import OrderSide
+from core.domain.indicator_registry import IndicatorSpec
 from core.domain.models import StrategyConfig
 from runners.backtesting.engine import run_backtest
 from strategies.test_always_long import TestAlwaysLongStrategy
@@ -138,6 +140,52 @@ def test_charges_are_attached_when_a_charge_config_is_given():
     )
     assert trade.charges == expected.total
     assert trade.net_pnl == trade.pnl - expected.total
+
+
+class _SnapshotSpyStrategy(IStrategy):
+    """Never enters — just records the exact snapshot dict screen() was
+    given, so a test can assert on what got forwarded into it."""
+
+    name = "snapshot_spy"
+    display_name = "Snapshot Spy"
+    side = OrderSide.SELL
+
+    def __init__(self):
+        self.seen_snapshots = []
+
+    def screen(self, snapshot, symbols):
+        for symbol in symbols:
+            if symbol in snapshot:
+                self.seen_snapshots.append(dict(snapshot[symbol]))
+        return []
+
+
+def test_extra_indicators_are_forwarded_into_the_strategy_snapshot():
+    day = dt.date(2026, 1, 5)
+    rows = _flat_warmup(day, _FIRST_TRADEABLE_INDEX + 5, 100.0)
+    df = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime))
+    config = StrategyConfig()
+    spy = _SnapshotSpyStrategy()
+
+    run_backtest(spy, "TEST", df, config, extra_indicators=[IndicatorSpec.of("ema", period=20)])
+
+    assert spy.seen_snapshots  # screen() was actually called at least once
+    assert all("ema_20" in snap for snap in spy.seen_snapshots)
+    # the fixed set must still be there alongside it — additive, not replacing
+    assert all("ema9" in snap and "adx" in snap for snap in spy.seen_snapshots)
+
+
+def test_no_extra_indicators_means_no_dynamic_keys_in_snapshot():
+    day = dt.date(2026, 1, 5)
+    rows = _flat_warmup(day, _FIRST_TRADEABLE_INDEX + 5, 100.0)
+    df = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime))
+    config = StrategyConfig()
+    spy = _SnapshotSpyStrategy()
+
+    run_backtest(spy, "TEST", df, config)
+
+    assert spy.seen_snapshots
+    assert all("ema_20" not in snap for snap in spy.seen_snapshots)
 
 
 def test_no_charge_config_leaves_charges_none():

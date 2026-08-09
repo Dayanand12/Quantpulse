@@ -5,6 +5,7 @@ import { EquityCurveChart } from "../components/analytics/EquityCurveChart"
 import { StrategyTable } from "../components/analytics/StrategyTable"
 import { SummaryCardRow } from "../components/analytics/SummaryCard"
 import { backtestApi } from "../lib/backtestApi"
+import { formatStrategyParams } from "../lib/backtestTypes"
 import type { BacktestResultDetail, BacktestResultSummary } from "../lib/backtestTypes"
 import type { StrategyInfo } from "../lib/types"
 
@@ -15,8 +16,10 @@ const fieldClass =
 const labelClass = "mb-1 block text-xs font-medium text-[var(--ink-secondary)]"
 
 function comboLabel(r: BacktestResultSummary): string {
+  const paramsPart = formatStrategyParams(r.strategy_params_json)
   return (
-    `SL ${r.stoploss_pct} / TP ${r.target_pct} / Trail ${r.trailing_pct}` +
+    `${r.timeframe} · SL ${r.stoploss_pct} / TP ${r.target_pct} / Trail ${r.trailing_pct}` +
+    (paramsPart ? ` · ${paramsPart}` : "") +
     ` · ${r.date_from}→${r.date_to} · ${r.symbols === "WATCHLIST" ? "Watchlist" : r.symbols}`
   )
 }
@@ -29,6 +32,8 @@ export function Analysis() {
   const [detail, setDetail] = useState<BacktestResultDetail | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     backtestApi
@@ -65,6 +70,23 @@ export function Analysis() {
       .catch(() => setLoadError("Failed to load that result."))
       .finally(() => setLoading(false))
   }, [selection])
+
+  async function handleDeleteResult() {
+    if (selection === ALL_OPTION) return
+    const id = Number(selection)
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await backtestApi.deleteResult(id)
+      const refreshed = await backtestApi.results(strategy)
+      setResults(refreshed)
+      setSelection(ALL_OPTION)
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Failed to delete that result.")
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   if (loadError) {
     return (
@@ -129,17 +151,48 @@ export function Analysis() {
 
       {!loading && selection !== ALL_OPTION && detail && (
         <div className="flex flex-col gap-6">
-          <div className="rounded-lg border border-[var(--glass-border)] bg-[var(--glass-surface)] px-4 py-3 text-sm text-[var(--ink-secondary)]">
-            {detail.summary.symbols === "WATCHLIST" ? "Whole watchlist" : detail.summary.symbols} ·{" "}
-            {detail.summary.date_from} → {detail.summary.date_to} · {detail.summary.timeframe} · SL{" "}
-            {detail.summary.stoploss_pct}% / TP {detail.summary.target_pct}% / Trail{" "}
-            {detail.summary.trailing_pct}% · {detail.summary.charges_enabled ? "with" : "without"} charges
-            {detail.summary.created_at && (
-              <span className="ml-2 text-[var(--ink-muted)]">
-                logged {new Date(detail.summary.created_at).toLocaleString("en-IN")}
-              </span>
-            )}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--glass-border)] bg-[var(--glass-surface)] px-4 py-3 text-sm text-[var(--ink-secondary)]">
+            <div>
+              {detail.summary.symbols === "WATCHLIST" ? "Whole watchlist" : detail.summary.symbols} ·{" "}
+              {detail.summary.date_from} → {detail.summary.date_to} · {detail.summary.timeframe} · SL{" "}
+              {detail.summary.stoploss_pct}% / TP {detail.summary.target_pct}% / Trail{" "}
+              {detail.summary.trailing_pct}% · {detail.summary.charges_enabled ? "with" : "without"} charges
+              {detail.summary.created_at && (
+                <span className="ml-2 text-[var(--ink-muted)]">
+                  logged {new Date(detail.summary.created_at).toLocaleString("en-IN")}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleDeleteResult}
+              disabled={deleting}
+              title="Delete this stored combination — the underlying strategy is untouched"
+              className="shrink-0 rounded-md border border-[var(--status-critical)]/40 px-2.5 py-1 text-xs text-[var(--status-critical)] hover:bg-[var(--status-critical)]/10 disabled:opacity-50"
+            >
+              {deleting ? "Deleting…" : "Delete this combination"}
+            </button>
           </div>
+          {deleteError && <p className="text-xs text-[var(--status-critical)]">{deleteError}</p>}
+
+          {detail.summary.strategy_params_json && (
+            <div className="rounded-lg border border-[var(--glass-border)] bg-[var(--glass-surface)] px-4 py-3">
+              <div className="text-xs font-medium text-[var(--ink-secondary)]">
+                Indicator parameters used for this run
+              </div>
+              <div className="mt-1 text-sm text-[var(--ink-primary)]">
+                {formatStrategyParams(detail.summary.strategy_params_json) || "(no named parameters)"}
+              </div>
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-[var(--ink-muted)] hover:text-[var(--ink-primary)]">
+                  View raw conditions.json
+                </summary>
+                <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-[var(--surface-2)] p-3 text-xs">
+                  {JSON.stringify(JSON.parse(detail.summary.strategy_params_json), null, 2)}
+                </pre>
+              </details>
+            </div>
+          )}
 
           <SummaryCardRow metrics={detail.result.metrics} />
 

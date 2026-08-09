@@ -33,7 +33,9 @@ from core.application.interfaces.strategy_source_repository import IStrategySour
 from core.application.interfaces.trade_repository import ITradeRepository
 from core.application.interfaces.trading_engine import ITradingEngine
 from core.application.interfaces.watchlist_repository import IWatchlistRepository
+from core.domain.indicator_registry import IndicatorSpec
 from core.domain.models import Deployment, StrategyConfig
+from core.domain.strategy_conditions import required_indicators_from_json
 
 from infrastructure.auth.single_user_provider import SingleUserProvider
 from infrastructure.config.settings import Settings
@@ -65,6 +67,30 @@ from Data_ingestion.config_loader import load_stocks
 import strategies as strategies_package
 
 DEFAULT_STRATEGY_NAME = "orb_reversal"
+
+
+def _required_dynamic_indicators_for_deployments(
+    deployments: List[Deployment], strategies_dir: Path = None
+) -> List[IndicatorSpec]:
+    """Union of every ENABLED deployment's dynamically-requested
+    indicators (core/domain/indicator_registry.py — a strategy's
+    conditions.json asking for something beyond the always-computed
+    fixed set), deduplicated by canonical key. Resolved once here, same
+    as every other per-deployment thing this function builds — a
+    disabled deployment's strategy never gets evaluated, so its
+    indicators aren't worth computing for every symbol on every tick.
+    strategies_dir defaults to the real strategies/ package; overridable
+    so tests can point it at an isolated tmp directory."""
+    strategies_dir = strategies_dir or Path(strategies_package.__path__[0])
+    seen: dict = {}
+    for deployment in deployments:
+        if not deployment.enabled:
+            continue
+        path = strategies_dir / f"{deployment.strategy_name}.json"
+        raw = path.read_text(encoding="utf-8") if path.exists() else ""
+        for spec in required_indicators_from_json(raw):
+            seen.setdefault(spec.key, spec)
+    return list(seen.values())
 
 
 @dataclass
@@ -179,7 +205,8 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
     event_bus = InProcessEventBus()
     SqlTradeJournal(session_factory, event_bus)
 
-    live_engine = LiveEngine(symbols, capital=settings.initial_capital)
+    extra_indicators = _required_dynamic_indicators_for_deployments(deployments)
+    live_engine = LiveEngine(symbols, capital=settings.initial_capital, extra_indicators=extra_indicators)
     warm_start_indicators(live_engine, zerodha_client, symbols, zerodha_client.exchange)
     trading_engine: ITradingEngine = LiveEngineAdapter(live_engine)
 

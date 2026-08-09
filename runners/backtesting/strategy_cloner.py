@@ -8,12 +8,19 @@ syntax checked before it ever hits disk, "already exists" caught cleanly.
 """
 
 import re
+from typing import Optional
 
+from core.application.interfaces.strategy_params_repository import IStrategyParamsRepository
 from core.application.interfaces.strategy_source_repository import IStrategySourceRepository
 from runners.backtesting.strategy_resolver import resolve_strategy_class
 
 
-def clone_strategy(source_repo: IStrategySourceRepository, base_name: str, new_name: str) -> str:
+def clone_strategy(
+    source_repo: IStrategySourceRepository,
+    base_name: str,
+    new_name: str,
+    params_repo: Optional[IStrategyParamsRepository] = None,
+) -> str:
     """Copies base_name's source to a new file named new_name, with the
     `name`/`display_name` class attributes updated so the clone is a
     distinct, independently-selectable strategy in both the Backtest
@@ -21,7 +28,12 @@ def clone_strategy(source_repo: IStrategySourceRepository, base_name: str, new_n
     silently collides with the original's identity (see
     infrastructure/strategies/file_strategy_registry.py — it keys
     strategies by `name`, and a duplicate would let one overwrite the
-    other with no error)."""
+    other with no error).
+
+    If base_name has a conditions.json (core/domain/strategy_conditions.py)
+    and params_repo is given, that gets copied to the clone too — so
+    "clone, then tune the copy's indicator thresholds" works without
+    silently falling back to the original's file."""
     base_cls = resolve_strategy_class(base_name)
     base_instance = base_cls()
 
@@ -44,4 +56,10 @@ def clone_strategy(source_repo: IStrategySourceRepository, base_name: str, new_n
     )
 
     source_repo.create_source(new_name, new_source)
+
+    if params_repo is not None:
+        base_params = params_repo.get_params(base_name)
+        if base_params is not None:
+            params_repo.create_params(new_name, base_params)
+
     return new_source

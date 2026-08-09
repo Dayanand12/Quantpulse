@@ -38,8 +38,8 @@ from core.domain.strategy_conditions import ConditionSet
 
 
 class VwapReclaimStrategy(IStrategy):
-    name = "vwap_reclaim"
-    display_name = "VWAP Reclaim (Long)"
+    name = "vwap_reclaim_long_v1"
+    display_name = "VWAP Reclaim (Long) [vwap_reclaim_long_v1]"
     side = OrderSide.BUY
 
     def __init__(self) -> None:

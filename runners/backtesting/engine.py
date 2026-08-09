@@ -29,17 +29,19 @@ from core.domain.charges import ChargeConfig, compute_charges
 from core.domain.enums import OrderSide
 from core.domain.market_condition import classify_market_condition
 from core.domain.models import StrategyConfig, Trade
+from core.domain.indicator_registry import IndicatorSpec
+from core.domain.strategy_conditions import VALID_SNAPSHOT_FIELDS
 from runners.backtesting.snapshot_builder import build_snapshot_series
 from runners.paper_trading.live_engine import SUPPORTED_TIMEFRAMES
 
 # Keys forwarded to IStrategy.screen() — exactly LiveEngine.get_snapshot()'s
 # per-symbol shape (see live_engine.py::_update_snapshot). `high`/`low`
 # in the precomputed series are for this module's own SL/target checks
-# and must never leak into what a strategy sees.
-_STRATEGY_SNAPSHOT_KEYS = (
-    "ltp", "ema5", "ema9", "ema21", "rsi", "adx", "atr_pct",
-    "vwap", "volume_ratio", "orb_low", "distance_to_or_low",
-)
+# and must never leak into what a strategy sees. Same tuple
+# ConditionSet.from_dict() validates a strategy's conditions.json field
+# references against (core/domain/strategy_conditions.py) — one source of
+# truth, so the two can never silently drift apart.
+_STRATEGY_SNAPSHOT_KEYS = VALID_SNAPSHOT_FIELDS
 
 
 @dataclass
@@ -103,6 +105,7 @@ def run_backtest(
     charge_config: Optional[ChargeConfig] = None,
     date_from: Optional[dt.date] = None,
     date_to: Optional[dt.date] = None,
+    extra_indicators: Optional[List[IndicatorSpec]] = None,
 ) -> List[Trade]:
     """base_df: 1-minute OHLCV for `symbol` (runners/backtesting/
     historical_loader.load_equity_csv). Returns every closed trade, in the
@@ -114,10 +117,19 @@ def run_backtest(
     give EMA/RSI/ADX a cold start right at date_from instead of the warmed-
     up values a live/paper deployment would actually have on that date
     (see runners/paper_trading/warm_start.py, which exists to avoid this
-    exact problem for live trading)."""
+    exact problem for live trading).
+
+    extra_indicators: any indicators `strategy`'s conditions.json needs
+    beyond the always-available fixed set (see runners/backtesting/
+    result_persistence.py::required_dynamic_indicators, which derives
+    this from the strategy's JSON) — forwarded into screen()'s snapshot
+    dict alongside the fixed keys, keyed by their canonical name (e.g.
+    "ema_20")."""
+    extra_indicators = extra_indicators or []
+    extra_keys = tuple(spec.key for spec in extra_indicators)
 
     timeframe_minutes = SUPPORTED_TIMEFRAMES[config.timeframe]
-    bars = build_snapshot_series(base_df, timeframe_minutes)
+    bars = build_snapshot_series(base_df, timeframe_minutes, extra_indicators=extra_indicators)
 
     if date_from is not None:
         bars = bars.filter(pl.col("date").dt.date() >= date_from)
@@ -195,7 +207,7 @@ def run_backtest(
 
         # -------- then entries, mirroring ExecutionManager._manage_entries
         if state is None and cycles_today < config.max_cycles_per_day and row["ltp"] is not None:
-            snapshot = {k: row[k] for k in _STRATEGY_SNAPSHOT_KEYS}
+            snapshot = {k: row[k] for k in (*_STRATEGY_SNAPSHOT_KEYS, *extra_keys)}
             candidates = strategy.screen({symbol: snapshot}, [symbol])
 
             if symbol in candidates:

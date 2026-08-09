@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Type
 
 from core.application.interfaces.strategy import IStrategy
 from core.domain.charges import ChargeConfig
+from core.domain.indicator_registry import IndicatorSpec
 from core.domain.metrics import PerformanceMetrics, compute_performance_metrics
 from core.domain.models import StrategyConfig, Trade
 from runners.backtesting.engine import run_backtest
@@ -53,11 +54,12 @@ def build_config_grid(base: StrategyConfig, **param_ranges: Sequence) -> List[St
 
 
 def _run_one(args: tuple) -> Tuple[int, List[Trade]]:
-    strategy_cls, symbol, csv_path, config_index, config, charge_config, date_from, date_to = args
+    strategy_cls, symbol, csv_path, config_index, config, charge_config, date_from, date_to, extra_indicators = args
     df = load_equity_csv(csv_path)
     strategy = strategy_cls()
     trades = run_backtest(
-        strategy, symbol, df, config, charge_config=charge_config, date_from=date_from, date_to=date_to
+        strategy, symbol, df, config, charge_config=charge_config, date_from=date_from, date_to=date_to,
+        extra_indicators=extra_indicators,
     )
     return config_index, trades
 
@@ -71,13 +73,14 @@ def sweep_parameters(
     max_workers: Optional[int] = None,
     date_from: Optional[dt.date] = None,
     date_to: Optional[dt.date] = None,
+    extra_indicators: Optional[List[IndicatorSpec]] = None,
 ) -> List[SweepResult]:
     """symbols: [(symbol, csv_path), ...] — one entry for a single-symbol
     sweep, many for "how does each config do across my whole watchlist."
     Every symbol's trades for the same config_grid index are pooled before
     computing that config's metrics."""
     tasks = [
-        (strategy_cls, symbol, csv_path, i, config, charge_config, date_from, date_to)
+        (strategy_cls, symbol, csv_path, i, config, charge_config, date_from, date_to, extra_indicators)
         for i, config in enumerate(config_grid)
         for symbol, csv_path in symbols
     ]
