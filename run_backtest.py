@@ -33,6 +33,7 @@ from runners.backtesting.historical_loader import load_equity_csv
 from runners.backtesting.parameter_sweep import build_config_grid, rank_by, sweep_parameters
 from runners.backtesting.report import write_backtest_report, write_sweep_report
 from runners.backtesting.result_persistence import (
+    breakdown_rows,
     required_dynamic_indicators,
     save_backtest_result,
     symbols_identity,
@@ -216,7 +217,23 @@ def main() -> None:
                     result_repo, strategy_name=args.strategy, symbols_id=symbols_id,
                     config=r.config, charges_enabled=args.charges,
                     date_from=requested_date_from or data_min, date_to=requested_date_to or data_max,
-                    result={"total_trades": r.metrics.total_trades, "metrics": asdict(r.metrics), "capital": args.capital},
+                    result={
+                        "total_trades": r.metrics.total_trades,
+                        "metrics": asdict(r.metrics),
+                        "capital": args.capital,
+                        # sweep_parameters() only returns aggregated
+                        # metrics per config, not the raw trades (would
+                        # mean shipping trade objects back through every
+                        # worker process for every config combination) —
+                        # so these stay empty rather than absent, keeping
+                        # the shape consistent with every other saved
+                        # result the Analysis tab renders.
+                        "symbols_used": [],
+                        "equity_curve": [],
+                        "by_symbol": [],
+                        "by_market_condition": [],
+                        "by_side": [],
+                    },
                 )
             print(f"\nLogged {len(results)} config result(s) to backtest_results.")
         return
@@ -275,6 +292,12 @@ def main() -> None:
                 "total_trades": len(all_trades),
                 "metrics": asdict(metrics),
                 "equity_curve": [asdict(p) for p in equity_curve(all_trades)],
+                # Same shape backtest_server.py's /api/backtest/run saves —
+                # the Analysis tab's StrategyTable expects these three to
+                # exist regardless of which path produced the result.
+                "by_symbol": breakdown_rows(all_trades, lambda t: t.symbol),
+                "by_market_condition": breakdown_rows(all_trades, lambda t: t.market_condition),
+                "by_side": breakdown_rows(all_trades, lambda t: t.side.value),
                 "capital": args.capital,
             },
         )

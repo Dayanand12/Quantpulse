@@ -11,31 +11,11 @@ The crossing condition lives in ema_crossover.json next to this file, not
 here — see core/domain/strategy_conditions.py.
 """
 
-from pathlib import Path
-from typing import Dict, List
-
-from core.application.interfaces.strategy import IStrategy
 from core.domain.enums import OrderSide
-from core.domain.strategy_conditions import ConditionSet
+from core.domain.json_condition_strategy import JsonConditionStrategy
 
 
-class EmaCrossoverStrategy(IStrategy):
+class EmaCrossoverStrategy(JsonConditionStrategy):
     name = "ema_crossover"
     display_name = "EMA 5/9 Crossover (Long)"
     side = OrderSide.BUY
-
-    def __init__(self) -> None:
-        self._conditions = ConditionSet.from_file(Path(__file__).with_suffix(".json"))
-
-    def screen(self, snapshot: Dict[str, dict], symbols: List[str]) -> List[str]:
-        candidates = []
-
-        for symbol in symbols:
-            data = snapshot.get(symbol)
-            if not data:
-                continue
-
-            if self._conditions.evaluate(symbol, data):
-                candidates.append(symbol)
-
-        return candidates

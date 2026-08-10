@@ -33,31 +33,11 @@ run_backtest.py before changing adx_min/volume_ratio_min again — and set
 trailing_pct=1.0 (not the 0.1% default) if this is ever deployed.
 """
 
-from pathlib import Path
-from typing import Dict, List
-
-from core.application.interfaces.strategy import IStrategy
 from core.domain.enums import OrderSide
-from core.domain.strategy_conditions import ConditionSet
+from core.domain.json_condition_strategy import JsonConditionStrategy
 
 
-class OrbBreakoutLongStrategy(IStrategy):
+class OrbBreakoutLongStrategy(JsonConditionStrategy):
     name = "orb_breakout_long"
     display_name = "ORB Breakout (Long)"
     side = OrderSide.BUY
-
-    def __init__(self) -> None:
-        self._conditions = ConditionSet.from_file(Path(__file__).with_suffix(".json"))
-
-    def screen(self, snapshot: Dict[str, dict], symbols: List[str]) -> List[str]:
-        candidates = []
-
-        for symbol in symbols:
-            data = snapshot.get(symbol)
-            if not data:
-                continue
-
-            if self._conditions.evaluate(symbol, data):
-                candidates.append(symbol)
-
-        return candidates

@@ -1,18 +1,25 @@
-import { useState } from "react"
 import { ChartCard } from "../components/analytics/ChartCard"
 import { EquityCurveChart } from "../components/analytics/EquityCurveChart"
 import { StrategyTable } from "../components/analytics/StrategyTable"
 import { SummaryCardRow } from "../components/analytics/SummaryCard"
 import { BacktestForm } from "../components/backtest/BacktestForm"
 import { BacktestTradesTable } from "../components/backtest/BacktestTradesTable"
+import { BatchRunner } from "../components/backtest/BatchRunner"
+import { BulkUpload } from "../components/backtest/BulkUpload"
 import { backtestApi } from "../lib/backtestApi"
-import { DEFAULT_BACKTEST_CONFIG, type BacktestRunConfig, type BacktestRunResult } from "../lib/backtestTypes"
+import type { BacktestRunConfig } from "../lib/backtestTypes"
+import { playBacktestCompleteSound } from "../lib/notifySound"
+import { useBacktestPageStore } from "../store/backtestPageStore"
 
 export function Backtest() {
-  const [config, setConfig] = useState<BacktestRunConfig>(DEFAULT_BACKTEST_CONFIG)
-  const [result, setResult] = useState<BacktestRunResult | null>(null)
-  const [running, setRunning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const config = useBacktestPageStore((s) => s.config)
+  const result = useBacktestPageStore((s) => s.result)
+  const running = useBacktestPageStore((s) => s.running)
+  const error = useBacktestPageStore((s) => s.error)
+  const setConfig = useBacktestPageStore((s) => s.setConfig)
+  const setResult = useBacktestPageStore((s) => s.setResult)
+  const setRunning = useBacktestPageStore((s) => s.setRunning)
+  const setError = useBacktestPageStore((s) => s.setError)
 
   async function runBacktest(resolvedConfig: BacktestRunConfig) {
     setRunning(true)
@@ -24,6 +31,7 @@ export function Backtest() {
       setError(e instanceof Error ? e.message : "Backtest failed.")
     } finally {
       setRunning(false)
+      playBacktestCompleteSound()
     }
   }
 
@@ -38,6 +46,10 @@ export function Backtest() {
       </div>
 
       <BacktestForm config={config} onChange={setConfig} onRun={runBacktest} running={running} />
+
+      {config.strategy && <BatchRunner strategy={config.strategy} sharedConfig={config} />}
+
+      {config.strategy && <BulkUpload strategy={config.strategy} sharedConfig={config} />}
 
       {error && (
         <p className="rounded-lg border border-[var(--status-critical)]/40 bg-[var(--status-critical)]/10 px-4 py-3 text-sm text-[var(--status-critical)]">

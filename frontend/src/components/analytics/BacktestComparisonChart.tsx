@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { fmtCurrency, fmtNumber, fmtPercent } from "../../lib/format"
 import { formatStrategyParams } from "../../lib/backtestTypes"
 import type { BacktestResultSummary } from "../../lib/backtestTypes"
 import { EmptyState } from "./EmptyState"
 
 type MetricKey = "total_pnl" | "win_rate" | "profit_factor" | "sharpe_ratio" | "max_drawdown_pct"
+
+const PAGE_SIZE = 10
 
 const METRICS: { key: MetricKey; label: string; format: (n: number) => string }[] = [
   { key: "total_pnl", label: "Net P&L", format: fmtCurrency },
@@ -36,6 +38,7 @@ interface BacktestComparisonChartProps {
 // "when").
 export function BacktestComparisonChart({ results, selectedId, onSelect }: BacktestComparisonChartProps) {
   const [metricKey, setMetricKey] = useState<MetricKey>("total_pnl")
+  const [page, setPage] = useState(0)
   const metric = METRICS.find((m) => m.key === metricKey)!
 
   const ranked = useMemo(() => {
@@ -44,6 +47,17 @@ export function BacktestComparisonChart({ results, selectedId, onSelect }: Backt
     withValue.sort((a, b) => (b[metricKey] as number) - (a[metricKey] as number))
     return [...withValue, ...withoutValue]
   }, [results, metricKey])
+
+  // Ranking (and the underlying result set) can reorder/resize what page
+  // `page` used to point at — reset to the first page rather than risk
+  // landing on an empty or out-of-range page.
+  useEffect(() => {
+    setPage(0)
+  }, [metricKey, results])
+
+  const pageCount = Math.max(1, Math.ceil(ranked.length / PAGE_SIZE))
+  const clampedPage = Math.min(page, pageCount - 1)
+  const paged = ranked.slice(clampedPage * PAGE_SIZE, clampedPage * PAGE_SIZE + PAGE_SIZE)
 
   const maxAbs = useMemo(
     () => Math.max(1e-9, ...ranked.map((r) => Math.abs((r[metricKey] as number) ?? 0))),
@@ -78,8 +92,8 @@ export function BacktestComparisonChart({ results, selectedId, onSelect }: Backt
         ))}
       </div>
 
-      <div className="flex max-h-[420px] flex-col gap-1.5 overflow-y-auto pr-1">
-        {ranked.map((r) => {
+      <div className="flex flex-col gap-1.5">
+        {paged.map((r) => {
           const value = r[metricKey] as number | null
           const pct = value === null ? 0 : (Math.abs(value) / maxAbs) * 100
           const positive = value !== null && value >= 0
@@ -120,6 +134,33 @@ export function BacktestComparisonChart({ results, selectedId, onSelect }: Backt
           )
         })}
       </div>
+
+      {pageCount > 1 && (
+        <div className="mt-3 flex items-center justify-between gap-3 text-xs text-[var(--ink-muted)]">
+          <span>
+            {clampedPage * PAGE_SIZE + 1}–{Math.min((clampedPage + 1) * PAGE_SIZE, ranked.length)} of{" "}
+            {ranked.length}
+          </span>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={clampedPage === 0}
+              className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 hover:bg-[var(--page)] disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+              disabled={clampedPage >= pageCount - 1}
+              className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 hover:bg-[var(--page)] disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

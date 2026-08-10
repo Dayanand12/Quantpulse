@@ -1,4 +1,5 @@
 fastapi
+python-multipart
 uvicorn[standard]
 websockets
 polars
@@ -8,6 +9,7 @@ openpyxl
 numpy
 pyyaml
 python-dotenv
+requests
 kiteconnect
 flask
 pydantic-settings

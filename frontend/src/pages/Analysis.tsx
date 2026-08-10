@@ -2,12 +2,45 @@ import { useEffect, useState } from "react"
 import { BacktestComparisonChart } from "../components/analytics/BacktestComparisonChart"
 import { ChartCard } from "../components/analytics/ChartCard"
 import { EquityCurveChart } from "../components/analytics/EquityCurveChart"
+import { MetricsGlossary } from "../components/analytics/MetricsGlossary"
 import { StrategyTable } from "../components/analytics/StrategyTable"
 import { SummaryCardRow } from "../components/analytics/SummaryCard"
 import { backtestApi } from "../lib/backtestApi"
 import { formatStrategyParams } from "../lib/backtestTypes"
 import type { BacktestResultDetail, BacktestResultSummary } from "../lib/backtestTypes"
 import type { StrategyInfo } from "../lib/types"
+
+// Everything about one stored run in a single self-contained object — the
+// strategy's actual conditions.json plus what it was tested with plus how
+// it performed, so pasting this whole thing into an LLM for tuning
+// research doesn't need three separate copies from three separate places.
+function buildResearchBlob(detail: BacktestResultDetail): object {
+  let conditions: unknown = null
+  if (detail.summary.strategy_params_json) {
+    try {
+      conditions = JSON.parse(detail.summary.strategy_params_json)
+    } catch {
+      conditions = detail.summary.strategy_params_json // malformed JSON — still worth including raw
+    }
+  }
+  return {
+    strategy: detail.summary.strategy_name,
+    symbols: detail.summary.symbols,
+    date_from: detail.summary.date_from,
+    date_to: detail.summary.date_to,
+    timeframe: detail.summary.timeframe,
+    quantity: detail.summary.quantity,
+    stoploss_pct: detail.summary.stoploss_pct,
+    target_pct: detail.summary.target_pct,
+    trailing_pct: detail.summary.trailing_pct,
+    max_cycles_per_day: detail.summary.max_cycles_per_day,
+    start_time: detail.summary.start_time,
+    end_time: detail.summary.end_time,
+    charges_enabled: detail.summary.charges_enabled,
+    strategy_conditions: conditions,
+    metrics: detail.result.metrics,
+  }
+}
 
 const ALL_OPTION = "__all__"
 
@@ -34,6 +67,10 @@ export function Analysis() {
   const [loading, setLoading] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   useEffect(() => {
     backtestApi
@@ -70,6 +107,37 @@ export function Analysis() {
       .catch(() => setLoadError("Failed to load that result."))
       .finally(() => setLoading(false))
   }, [selection])
+
+  async function handleCopyResearchBlob() {
+    if (!detail) return
+    const text = JSON.stringify(buildResearchBlob(detail), null, 2)
+    setCopyError(null)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setCopyError("Couldn't copy — your browser blocked clipboard access.")
+    }
+  }
+
+  async function handleExportExcel() {
+    setExporting(true)
+    setExportError(null)
+    try {
+      const blob = await backtestApi.exportResultsExcel(strategy)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${strategy}_backtest_comparison.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : "Failed to export.")
+    } finally {
+      setExporting(false)
+    }
+  }
 
   async function handleDeleteResult() {
     if (selection === ALL_OPTION) return
@@ -140,6 +208,20 @@ export function Analysis() {
         <ChartCard
           title="Parameter Comparison"
           subtitle="Every stored run for this strategy — click a bar (or pick it above) to see its full breakdown"
+          action={
+            <div className="flex flex-col items-end gap-1">
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                disabled={exporting || results.length === 0}
+                title="Download every stored run for this strategy as one .xlsx — handy for a spreadsheet or pasting/uploading into an LLM"
+                className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--page)] disabled:opacity-50"
+              >
+                {exporting ? "Exporting…" : "Export Excel"}
+              </button>
+              {exportError && <p className="text-[11px] text-[var(--status-critical)]">{exportError}</p>}
+            </div>
+          }
         >
           <BacktestComparisonChart
             results={results}
@@ -185,10 +267,23 @@ export function Analysis() {
               </div>
               <details className="mt-2">
                 <summary className="cursor-pointer text-xs text-[var(--ink-muted)] hover:text-[var(--ink-primary)]">
-                  View raw conditions.json
+                  View full JSON (conditions + run parameters + metrics)
                 </summary>
-                <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-[var(--surface-2)] p-3 text-xs">
-                  {JSON.stringify(JSON.parse(detail.summary.strategy_params_json), null, 2)}
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-xs text-[var(--ink-muted)]">
+                    Everything about this run in one block — paste it wherever you're researching tuning ideas.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyResearchBlob}
+                    className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-xs hover:bg-[var(--page)]"
+                  >
+                    {copied ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+                {copyError && <p className="mt-1 text-xs text-[var(--status-critical)]">{copyError}</p>}
+                <pre className="mt-2 max-h-96 overflow-auto rounded-md bg-[var(--surface-2)] p-3 text-xs">
+                  {JSON.stringify(buildResearchBlob(detail), null, 2)}
                 </pre>
               </details>
             </div>
@@ -196,18 +291,26 @@ export function Analysis() {
 
           <SummaryCardRow metrics={detail.result.metrics} />
 
+          <MetricsGlossary />
+
           <ChartCard title="Equity Curve" subtitle="Cumulative P&L across every closed trade in this run">
-            <EquityCurveChart points={detail.result.equity_curve} />
+            <EquityCurveChart points={detail.result.equity_curve ?? []} />
           </ChartCard>
 
+          {/* by_symbol/by_market_condition are empty (not absent) for a
+              sweep-saved result — run_backtest.py --sweep only has
+              aggregated metrics per config, not the raw trades a
+              breakdown needs — but default defensively anyway in case
+              anything up the chain ever produces a genuinely missing
+              field instead of an empty array. */}
           <StrategyTable
-            rows={detail.result.by_symbol}
+            rows={detail.result.by_symbol ?? []}
             title="By Symbol"
             firstColumnLabel="Symbol"
             searchPlaceholder="Search symbols…"
           />
           <StrategyTable
-            rows={detail.result.by_market_condition}
+            rows={detail.result.by_market_condition ?? []}
             title="By Market Condition"
             firstColumnLabel="Condition"
             searchPlaceholder="Search conditions…"

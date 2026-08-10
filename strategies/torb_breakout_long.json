@@ -1,0 +1,6 @@
+{
+  "parameters": {},
+  "conditions": [
+    { "left": "ltp", "op": "crossed_above", "right": { "field": "orb_high" } }
+  ]
+}

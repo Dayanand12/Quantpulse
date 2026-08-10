@@ -6,13 +6,15 @@ either path dedups against the same stored history.
 """
 
 import datetime as dt
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from core.application.interfaces.backtest_result_repository import IBacktestResultRepository
 from core.domain.backtest_result import BacktestResult, BacktestRunParams
 from core.domain.indicator_registry import IndicatorSpec
-from core.domain.models import StrategyConfig
+from core.domain.metrics import compute_performance_metrics
+from core.domain.models import StrategyConfig, Trade
 from core.domain.strategy_conditions import required_indicators_from_json
 
 
@@ -35,6 +37,35 @@ def required_dynamic_indicators(strategy_name: str) -> List[IndicatorSpec]:
     instead of a permanent None. [] for a strategy with no conditions.json
     yet, or one that only uses bare/fixed field references."""
     return required_indicators_from_json(read_strategy_params_json(strategy_name))
+
+
+def breakdown_rows(trades: List[Trade], key_fn: Callable[[Trade], Optional[str]]) -> List[dict]:
+    """Same shape as server/main.py's by_strategy: [{strategy_name,
+    deployment_id, capital, metrics}] — `strategy_name` here holds
+    whatever's being broken down by (symbol/market condition/side), so
+    the frontend can reuse StrategyTable unmodified for all three. Shared
+    between backtest_server.py (the UI's /api/backtest/run) and
+    run_backtest.py (the CLI) so a stored result's shape can never drift
+    apart depending on which one produced it — a real bug once: the CLI's
+    saved by_symbol/by_market_condition/by_side were simply missing,
+    which crashed the Analysis tab (StrategyTable expects them) for every
+    result the CLI had ever saved."""
+    groups: Dict[str, List[Trade]] = {}
+    for t in trades:
+        key = key_fn(t)
+        if key is not None:
+            groups.setdefault(key, []).append(t)
+
+    rows = [
+        {
+            "strategy_name": key,
+            "deployment_id": None,
+            "capital": 0,
+            "metrics": asdict(compute_performance_metrics(group, capital=0)),
+        }
+        for key, group in groups.items()
+    ]
+    return sorted(rows, key=lambda r: r["metrics"]["total_trades"], reverse=True)
 
 
 def symbols_identity(symbols: Optional[List[str]], is_full_watchlist: bool) -> str:

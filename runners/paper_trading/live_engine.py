@@ -289,11 +289,14 @@ class LiveEngine:
                 (latest["close"] - orb_low) / orb_low
             ) * 100
 
-        # orb_high masked until the OR window has actually locked (same
-        # 9:15-9:30 window orb_low/distance_to_or_low track) — unlike
-        # orb_low above, this field has no existing raw-before-lock
-        # consumer to stay compatible with, so it's gated correctly from
-        # the start rather than inheriting that quirk.
+        # orb_low/orb_high masked until the OR window has actually
+        # locked — a still-forming range isn't the real one yet, in
+        # either direction, and a strategy reading it as final before
+        # then would see something that could still change (masked
+        # consistently now — orb_low used to be exposed unmasked here,
+        # harmless while nothing read it directly, but inconsistent with
+        # the backtest side, which masks it in snapshot_builder.py).
+        or_ready = orb_low is not None and self.or_data[symbol]["locked"]
         orb_high = self.or_data[symbol]["high"]
         orb_high_ready = orb_high is not None and self.or_data[symbol]["locked"]
 
@@ -310,7 +313,7 @@ class LiveEngine:
             "atr_pct": float(atr_pct),
             "vwap": float(vwap),
             "volume_ratio": float(volume_ratio),
-            "orb_low": float(orb_low) if orb_low else None,
+            "orb_low": float(orb_low) if or_ready else None,
             "orb_high": float(orb_high) if orb_high_ready else None,
             "distance_to_or_low": float(distance_to_or_low) if distance_to_or_low else None
         }

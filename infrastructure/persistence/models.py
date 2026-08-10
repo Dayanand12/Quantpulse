@@ -170,3 +170,25 @@ class RegimeCallRecord(Base):
     return_15m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     return_30m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     return_60m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class BatchJobRecord(Base):
+    """One uploaded parameter-sweep Excel for one strategy (core/domain/
+    batch_job.py) — background-processed, so `scenarios_json` (each
+    scenario's label/overrides/status/saved_result_id/error) is the
+    durable source of truth for progress, not just the runner's in-memory
+    state (see runners/backtesting/batch_job_runner.py, which re-saves
+    this row after every scenario). `shared_config_json` is the run
+    settings (symbols/dates/risk/sizing) every scenario in this job used —
+    same shape as a single run's config minus strategy/panels."""
+
+    __tablename__ = "batch_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_name: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16))
+    shared_config_json: Mapped[str] = mapped_column(Text)
+    scenarios_json: Mapped[str] = mapped_column(Text)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

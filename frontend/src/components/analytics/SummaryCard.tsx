@@ -16,7 +16,16 @@ type Trend = "up" | "down" | null
 export interface MetricCardConfig {
   key: string
   label: string
+  // Full plain-language explanation, shown on hover — what the number
+  // means AND what counts as good vs bad, not just a formula. Written for
+  // someone who isn't already familiar with trading metrics.
   tooltip: string
+  // Short always-visible words next to the trend arrow (not hover-only —
+  // easy to miss a tooltip) — goodLabel when trend is "up", badLabel when
+  // trend is "down". Omitted for cards with no trend() (e.g. Total
+  // Trades, where more/fewer isn't inherently good or bad).
+  goodLabel?: string
+  badLabel?: string
   icon: ComponentType<SVGProps<SVGSVGElement>>
   accent: string // CSS var name, e.g. "--card-blue"
   value: (m: PerformanceMetrics) => number | null
@@ -33,7 +42,8 @@ export const METRIC_CARDS: MetricCardConfig[] = [
   {
     key: "total_trades",
     label: "Total Trades",
-    tooltip: "Every closed trade matching the current filters",
+    tooltip:
+      "How many trades this run closed. Not good or bad by itself — but more trades means the other numbers on this page are statistically more trustworthy. A great Profit Factor from only 3 trades could easily be luck; the same number from 300 trades means a lot more.",
     icon: IconTrades,
     accent: "--card-blue",
     value: (m) => m.total_trades,
@@ -42,7 +52,10 @@ export const METRIC_CARDS: MetricCardConfig[] = [
   {
     key: "win_rate",
     label: "Win Rate",
-    tooltip: "Winning trades / total trades",
+    tooltip:
+      "The share of trades that closed profitable. Higher is generally better — but don't judge a strategy on this alone: a high win rate made of small wins and rare huge losses can still lose money overall. Always check Profit Factor and Net P&L alongside it.",
+    goodLabel: "Good",
+    badLabel: "Below 50%",
     icon: IconTarget,
     accent: "--card-green",
     value: (m) => m.win_rate,
@@ -53,7 +66,10 @@ export const METRIC_CARDS: MetricCardConfig[] = [
   {
     key: "profit_factor",
     label: "Profit Factor",
-    tooltip: "Gross profit / |gross loss| — above 1.0 means the strategy is net profitable",
+    tooltip:
+      "Total money won ÷ total money lost. Above 1.0 means the strategy made more than it lost overall. Below 1.0 means it's a NET LOSER even if some individual trades won — this is one of the clearest good/bad signals here. Rough guide: below 1.0 is bad, 1.0–1.3 is marginal, 1.5+ is solid.",
+    goodLabel: "Profitable",
+    badLabel: "Losing money",
     icon: IconPercent,
     accent: "--card-purple",
     value: (m) => m.profit_factor,
@@ -64,7 +80,10 @@ export const METRIC_CARDS: MetricCardConfig[] = [
   {
     key: "total_pnl",
     label: "Net P&L",
-    tooltip: "Total realized profit and loss across every matching trade",
+    tooltip:
+      "Actual rupees made or lost, after brokerage and taxes — the real bottom line. Positive (green) is good, negative (red) is bad. Unlike Win Rate or Profit Factor, this already accounts for HOW BIG each win/loss was, so it's the single most direct answer to \"did this make money.\"",
+    goodLabel: "Profitable",
+    badLabel: "Net loss",
     icon: IconTrendingUp,
     accent: "--card-orange",
     value: (m) => m.total_pnl,
@@ -74,7 +93,10 @@ export const METRIC_CARDS: MetricCardConfig[] = [
   {
     key: "max_drawdown",
     label: "Max Drawdown",
-    tooltip: "Largest peak-to-trough drop in cumulative P&L",
+    tooltip:
+      "The worst losing streak in this run — the biggest drop from a peak before it recovered. Lower is better: a large drawdown means bigger swings and more risk of running out of capital (or losing confidence and abandoning the strategy) before it recovers. Shown here as a rupee amount below 5% of capital reads as healthy.",
+    goodLabel: "Manageable",
+    badLabel: "Large swing",
     icon: IconTrendingDown,
     accent: "--card-teal",
     value: (m) => m.max_drawdown,
@@ -87,7 +109,10 @@ export const METRIC_CARDS: MetricCardConfig[] = [
   {
     key: "sharpe_ratio",
     label: "Sharpe Ratio",
-    tooltip: "Annualized, daily-bucketed risk-adjusted return",
+    tooltip:
+      "Return per unit of RISK taken, not just raw profit — it rewards steady, consistent gains and penalizes wild swings, even between two strategies with similar total profit. Higher is better: below 1 is weak, 1–2 is decent, above 2 is very good. Needs at least 2 trading days of data to compute at all.",
+    goodLabel: "Good",
+    badLabel: "Weak",
     icon: IconActivity,
     accent: "--card-red",
     value: (m) => m.sharpe_ratio,
@@ -126,11 +151,15 @@ function SummaryCard({ config, metrics }: { config: MetricCardConfig; metrics: P
 
         {trend && (
           <span
-            aria-label={trend === "up" ? "trending favorably" : "trending unfavorably"}
-            className="tabular-nums text-xs font-medium"
-            style={{ color: trend === "up" ? "var(--status-good)" : "var(--status-critical)" }}
+            className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+            style={{
+              color: trend === "up" ? "var(--status-good)" : "var(--status-critical)",
+              background: `color-mix(in srgb, var(${trend === "up" ? "--status-good" : "--status-critical"}) 14%, transparent)`,
+            }}
           >
-            {trend === "up" ? "▲" : "▼"}
+            <span aria-hidden>{trend === "up" ? "▲" : "▼"}</span>
+            {(trend === "up" ? config.goodLabel : config.badLabel) ??
+              (trend === "up" ? "Good" : "Weak")}
           </span>
         )}
       </div>

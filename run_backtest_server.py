@@ -8,6 +8,7 @@ frontend/vite.config.ts's dev proxy for /api/backtest/*.
 """
 
 import argparse
+import logging
 
 import uvicorn
 
@@ -18,6 +19,12 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=5050)
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
+
+    # Without this, runners/backtesting/telegram_bot.py's logger.info/
+    # warning calls go nowhere — no handler exists on the root logger
+    # until something configures one (uvicorn only configures its OWN
+    # "uvicorn"/"uvicorn.error"/"uvicorn.access" loggers, not the root).
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
 
     uvicorn.run("backtest_server:app", host=args.host, port=args.port, reload=args.reload)
 

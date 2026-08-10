@@ -8,7 +8,7 @@ just sets ENVIRONMENT=production plus real env vars — no code changes.
 
 from enum import Enum
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -66,6 +66,20 @@ class Settings(BaseSettings):
     # (`rclone listremotes`) — set up once outside this app.
     db_backup_dir: str = "backups"
     db_backup_remote: str = "gdrivebackup:QuantPulseBackups"
+
+    # Bulk-upload-by-Telegram (runners/backtesting/telegram_bot.py) — a
+    # bot token from @BotFather. Unset (the default) means the feature is
+    # simply off: backtest_server.py's lifespan only starts the polling
+    # thread when this is present, so a bare checkout with no .env entry
+    # behaves exactly as before this feature existed.
+    telegram_bot_token: Optional[str] = None
+    # Only messages from this Telegram user id are processed — everyone
+    # else gets a polite refusal. Find your own id by messaging
+    # @userinfobot. Left unset, ANY Telegram user who finds the bot could
+    # trigger backtests on this machine, so set this before sharing the
+    # bot's existence with anyone (including accidentally, via a public
+    # group it gets added to).
+    telegram_allowed_user_id: Optional[int] = None
 
     @property
     def is_production(self) -> bool:

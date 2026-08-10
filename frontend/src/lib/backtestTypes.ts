@@ -122,6 +122,96 @@ export function formatStrategyParams(rawJson: string): string {
   }
 }
 
+// The "6 panels" batch feature: one strategy, several parameter-override
+// sets, run together in one request (backtest_server.py's
+// /api/backtest/run-batch, runners/backtesting/batch_runner.py). Every
+// field except `panels` mirrors BacktestRunConfig — the same symbols/
+// dates/risk config apply to every panel, only each panel's `overrides`
+// differs.
+export interface BatchPanelConfig {
+  label: string
+  overrides: Record<string, number>
+}
+
+export interface BatchRunConfig {
+  strategy: string
+  panels: BatchPanelConfig[]
+  symbols?: string[]
+  timeframe: CandleTimeframe
+  quantity: number
+  stoploss_pct: number
+  target_pct: number
+  trailing_pct: number
+  max_cycles_per_day: number
+  start_time: string
+  end_time: string
+  capital: number
+  charges: boolean
+  date_from: string
+  date_to: string
+  save: boolean
+}
+
+export interface BatchPanelResult {
+  label: string
+  overrides: Record<string, number>
+  strategy_params_json: string
+  total_trades: number
+  metrics: PerformanceMetrics
+  equity_curve: EquityPoint[]
+  by_symbol: StrategyBreakdown[]
+  by_market_condition: StrategyBreakdown[]
+  by_side: StrategyBreakdown[]
+  saved_result_id?: number
+}
+
+export interface BatchRunResponse {
+  symbols_used: string[]
+  symbols_missing_data: string[]
+  panels: BatchPanelResult[]
+}
+
+// The bulk-upload feature: an Excel of parameter scenarios processed in
+// the background (backtest_server.py's POST /api/backtest/batch-jobs,
+// runners/backtesting/batch_job_runner.py) — distinct from BatchRunConfig
+// above (the synchronous "6 panels" feature): no panel cap, and detached
+// from the request that started it, so it keeps running even if you close
+// the browser entirely. `shared_config` mirrors BacktestRunConfig's
+// symbols/dates/risk fields but as a loose record — it's read-only
+// display data here, not something this page edits.
+// "skipped": an identical result already existed (same strategy, symbols,
+// dates, resolved risk/sizing, and resolved parameters) — nothing ran,
+// saved_result_id points at the pre-existing row. See runners/
+// backtesting/batch_job_runner.py::_find_already_tested.
+export type BatchJobScenarioStatus = "pending" | "running" | "done" | "skipped" | "invalid" | "error"
+export type BatchJobStatus = "pending" | "running" | "done" | "failed"
+
+export interface BatchJobScenario {
+  label: string
+  overrides: Record<string, number>
+  // This row's own risk/sizing values (Stop Loss %, Timeframe, ...) —
+  // only the fields the row actually specified; anything absent falls
+  // back to the job's shared_config. See runners/backtesting/
+  // batch_job_runner.py::DEFAULT_SCENARIO_SETTINGS.
+  config_overrides: Record<string, unknown>
+  status: BatchJobScenarioStatus
+  saved_result_id: number | null
+  error: string | null
+}
+
+export interface BatchJob {
+  id: number
+  strategy_name: string
+  status: BatchJobStatus
+  shared_config: Record<string, unknown>
+  total_scenarios: number
+  processed_scenarios: number
+  scenarios: BatchJobScenario[]
+  error: string | null
+  created_at: string | null
+  finished_at: string | null
+}
+
 export interface BacktestResultDetail {
   summary: BacktestResultSummary
   // Same shape as BacktestRunResult minus `trades`/`trades_truncated` —

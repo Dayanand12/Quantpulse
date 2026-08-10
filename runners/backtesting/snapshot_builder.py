@@ -128,19 +128,29 @@ def build_snapshot_series(
     )
 
     out = out.join(or_by_day, on="session_date", how="left")
+    # distance_to_or_low needs the RAW joined orb_low for its own math —
+    # computed here before orb_low itself gets masked below.
     out = out.with_columns(
         pl.when(pl.col("date").dt.time() > _OR_END)
         .then((pl.col("close") - pl.col("orb_low")) / pl.col("orb_low") * 100)
         .otherwise(None)
         .alias("distance_to_or_low")
     )
-    # orb_high masked the same way — see _opening_range's docstring for
-    # why this can't just be the raw joined value.
+    # orb_low/orb_high masked to None until the OR window has actually
+    # closed — see _opening_range's docstring for why the raw joined
+    # value can't be exposed as-is (this was previously ungated for
+    # orb_low specifically; harmless while nothing read it directly, but
+    # a real look-ahead bug for anything that does, e.g. a hard breakout
+    # condition against it).
     out = out.with_columns(
+        pl.when(pl.col("date").dt.time() > _OR_END)
+        .then(pl.col("orb_low"))
+        .otherwise(None)
+        .alias("orb_low"),
         pl.when(pl.col("date").dt.time() > _OR_END)
         .then(pl.col("orb_high"))
         .otherwise(None)
-        .alias("orb_high")
+        .alias("orb_high"),
     )
 
     out = out.rename({

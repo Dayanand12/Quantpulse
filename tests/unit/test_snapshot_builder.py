@@ -113,6 +113,24 @@ def test_orb_low_is_the_915_930_window_minimum():
     assert orb_lows == {expected_orb_low}
 
 
+def test_orb_low_is_none_until_after_930():
+    # A hard breakout condition against orb_low (e.g. torb_breakout_short)
+    # would otherwise see the FINAL opening-range low leak into bars from
+    # 9:15-9:29 — this aggregate is computed as one batch over the whole
+    # 9:15-9:30 window, so without masking it's known before it's actually
+    # finished forming (impossible live, where it's only known
+    # incrementally as candles arrive).
+    df = make_df([(dt.date(2026, 1, 5), 40, 100.0)])
+
+    snap = build_snapshot_series(df, timeframe_minutes=1)
+
+    for row in snap.iter_rows(named=True):
+        if row["date"].time() <= dt.time(9, 30):
+            assert row["orb_low"] is None
+        else:
+            assert row["orb_low"] is not None
+
+
 def test_vwap_resets_per_session():
     df = make_df([
         (dt.date(2026, 1, 5), 40, 100.0),

@@ -1,0 +1,8 @@
+{
+    "parameters": {
+        "threshold": 100.0
+    },
+    "conditions": [
+        {"left": "ltp", "op": ">=", "right": {"param": "threshold"}}
+    ]
+}
