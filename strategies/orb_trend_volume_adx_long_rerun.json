@@ -1,0 +1,14 @@
+{
+  "parameters": {
+    "volume_ratio_min": 2.0,
+    "adx_min": 30,
+    "adx_max": 60
+  },
+  "conditions": [
+    { "left": "ltp", "op": "crossed_above", "right": { "field": "orb_high" } },
+    { "left": "ema9", "op": ">", "right": { "field": "ema21" } },
+    { "left": "volume_ratio", "op": ">=", "right": { "param": "volume_ratio_min" } },
+    { "left": "adx", "op": ">=", "right": { "param": "adx_min" } },
+    { "left": "adx", "op": "<", "right": { "param": "adx_max" } }
+  ]
+}

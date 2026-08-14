@@ -1,4 +1,4 @@
-# run_all.py
+    # run_all.py
 """Runs paper trading AND backtesting together, sharing one frontend.
 
 Starts three things:

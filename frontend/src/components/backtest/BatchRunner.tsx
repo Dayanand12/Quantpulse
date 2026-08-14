@@ -112,9 +112,10 @@ export function BatchRunner({ strategy, sharedConfig }: BatchRunnerProps) {
                       <Stat label="Sharpe" value={fmtNumber(panel.result.metrics.sharpe_ratio)} />
                       <Stat label="Max DD %" value={fmtPercent(panel.result.metrics.max_drawdown_pct)} />
                     </div>
-                    {panel.result.saved_result_id !== undefined && (
+                    {panel.result.saved_result_ids !== undefined && (
                       <p className="mt-2 text-[10px] text-[var(--ink-muted)]">
-                        Saved to Analysis tab (result #{panel.result.saved_result_id})
+                        Saved {Object.keys(panel.result.saved_result_ids).length} per-symbol result
+                        {Object.keys(panel.result.saved_result_ids).length === 1 ? "" : "s"} to Analysis tab
                       </p>
                     )}
                   </div>

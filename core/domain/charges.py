@@ -40,6 +40,43 @@ class ChargeConfig:
     gst_pct: float = 0.18
 
 
+def options_charge_config() -> ChargeConfig:
+    """Zerodha F&O options rate card -- structurally different enough from
+    equity intraday that reusing EQUITY_DEFAULTS would misprice every
+    trade, but compute_charges()'s formula shape (min(turnover*pct, cap)
+    brokerage, STT on sell turnover, exchange/SEBI both legs, stamp duty
+    buy side, GST on brokerage+exchange) already fits options too -- only
+    the rate constants differ, so this reuses ChargeConfig rather than a
+    parallel dataclass.
+
+    Public/best-effort defaults, same "editable, not gospel" status as
+    EQUITY_DEFAULTS (see module docstring) -- verify against Zerodha's
+    current published rates before trusting exact net P&L figures, since
+    STT on options has been revised more than once by the government
+    (this reflects the post-Oct-2024 hike).
+
+    brokerage_pct=1.0 is a deliberate trick, not a real percentage: real
+    options brokerage is a flat Rs 20/executed-order with no turnover
+    comparison at all (unlike equity's genuine "0.03% or Rs20, whichever
+    is lower"). Setting the pct absurdly high guarantees compute_charges's
+    min(turnover*pct, cap) always resolves to the cap, i.e. flat Rs 20,
+    without needing a second code path.
+    """
+    return ChargeConfig(
+        brokerage_pct=1.0,
+        brokerage_max_per_order=20.0,
+        # STT: 0.1% of premium, sell side only (post-Oct-2024 rate).
+        stt_pct=0.001,
+        # NSE options exchange transaction charge -- far higher than
+        # equity's 0.00297% since it's levied on the (small) premium, not
+        # notional value.
+        exchange_txn_pct=0.0003503,
+        sebi_pct=0.000001,
+        stamp_duty_pct=0.00003,
+        gst_pct=0.18,
+    )
+
+
 @dataclass(frozen=True)
 class ChargeBreakdown:
     brokerage: float

@@ -13,7 +13,7 @@ sql_watchlist_repository.py / sql_deployment_repository.py).
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infrastructure.persistence.database import Base
@@ -62,11 +62,41 @@ class ChargeConfigRecord(Base):
     gst_pct: Mapped[float] = mapped_column(Float)
 
 
-class WatchlistSymbolRecord(Base):
-    __tablename__ = "watchlist_symbols"
+class WatchlistRecord(Base):
+    """A named, user-organized group of symbols — see
+    core.domain.models.Watchlist. Every watchlist's symbols are streamed
+    together regardless of which one a symbol lives in (see
+    sql_watchlist_repository.py::get_all_symbols) — this table is purely
+    for organizing/picking, not for gating what the live engine tracks."""
+
+    __tablename__ = "watchlists"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class WatchlistSymbolRecord(Base):
+    __tablename__ = "watchlist_symbols"
+    __table_args__ = (
+        UniqueConstraint("watchlist_id", "symbol", name="uq_watchlist_symbols_watchlist_id_symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    watchlist_id: Mapped[int] = mapped_column(Integer, ForeignKey("watchlists.id"))
+    symbol: Mapped[str] = mapped_column(String(32))
+
+
+class NseSymbolRecord(Base):
+    """NSE equity symbol master for typeahead suggestions — resynced on
+    demand from Kite's instrument dump (POST /api/symbols/resync), not a
+    live/tradeable-status source of truth (that's still Kite/the
+    watchlist)."""
+
+    __tablename__ = "nse_symbols"
+
+    tradingsymbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
 
 
 class DeploymentRecord(Base):
@@ -140,6 +170,22 @@ class BacktestResultRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)
 
+    # Denormalized OptionContract identity (core/domain/models.py), parsed
+    # from `symbols` once at save time by sql_backtest_result_repository.py
+    # — NULL for an equity result. Exists so the Options Analysis tab can
+    # filter/sort by underlying/strike/expiry/side directly in SQL instead
+    # of parsing every row's symbols string on every request — the same
+    # reason this table indexes strategy_name instead of scanning for it.
+    # Added once chain sweeps made it realistic for a single strategy to
+    # accumulate thousands of option rows (see the chain-sweep feature) —
+    # see this project's own notes on why total row count barely matters
+    # as long as the real query pattern (filter first, then narrow) stays
+    # indexed.
+    option_underlying: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    option_strike: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    option_expiry: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    option_side: Mapped[Optional[str]] = mapped_column(String(2), nullable=True)
+
 
 class RegimeCallRecord(Base):
     """One row per _classify() output (services/market_analysis_engine.py),
@@ -189,6 +235,28 @@ class BatchJobRecord(Base):
     status: Mapped[str] = mapped_column(String(16))
     shared_config_json: Mapped[str] = mapped_column(Text)
     scenarios_json: Mapped[str] = mapped_column(Text)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class ChainSweepRecord(Base):
+    """One option-chain sweep for one strategy (core/domain/chain_sweep.py)
+    — same one-row-with-a-JSON-progress-blob shape as BatchJobRecord above,
+    for the same reason (contracts_json is the durable source of truth for
+    progress, re-saved after every contract/chunk by runners/backtesting/
+    chain_sweep_runner.py, not just the runner's in-memory state)."""
+
+    __tablename__ = "chain_sweeps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_name: Mapped[str] = mapped_column(String(64), index=True)
+    underlying: Mapped[str] = mapped_column(String(32))
+    category: Mapped[str] = mapped_column(String(16))
+    expiry_filter: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    status: Mapped[str] = mapped_column(String(16))
+    shared_config_json: Mapped[str] = mapped_column(Text)
+    contracts_json: Mapped[str] = mapped_column(Text)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

@@ -32,7 +32,7 @@ from core.domain.indicator_registry import IndicatorSpec
 from core.domain.models import StrategyConfig, Trade
 from core.domain.strategy_conditions import ConditionSet, required_indicators_from_json
 from runners.backtesting.engine import run_backtest
-from runners.backtesting.historical_loader import load_equity_csv
+from runners.backtesting.historical_loader import load_backtest_csv
 from runners.backtesting.result_persistence import read_strategy_params_json
 
 
@@ -84,7 +84,7 @@ def _run_one(args: tuple) -> Tuple[int, str, List[Trade]]:
         strategy_cls, symbol, csv_path, panel_index, conditions_dict,
         config, charge_config, date_from, date_to, extra_indicators,
     ) = args
-    df = load_equity_csv(csv_path)
+    df = load_backtest_csv(csv_path)
     conditions = ConditionSet.from_dict(conditions_dict)
     strategy = strategy_cls(conditions=conditions)  # fresh instance, no carried-over state
     trades = run_backtest(

@@ -8,7 +8,7 @@ to know or care which one is in use.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from core.domain.models import Tick
 
@@ -21,3 +21,15 @@ class IMarketDataProvider(ABC):
     @abstractmethod
     def get_latest_ticks(self) -> Dict[str, Tick]:
         """Return the most recent raw tick received for every subscribed symbol."""
+
+    @abstractmethod
+    def add_symbol(self, symbol: str) -> None:
+        """Subscribe one more symbol on an already-running feed — no
+        restart needed. A no-op if already subscribed."""
+
+    @abstractmethod
+    def seconds_since_last_tick(self) -> Optional[float]:
+        """How long since a tick actually arrived, or None if none has yet.
+        The feed-health signal — market_data can hold stale values forever
+        after a dead websocket, so this has to come from callback activity,
+        not from whether get_latest_ticks() returns anything."""

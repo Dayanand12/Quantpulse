@@ -91,6 +91,23 @@ _VALID_OPS = set(_COMPARATORS) | _CROSSING_OPS
 VALID_SNAPSHOT_FIELDS = (
     "ltp", "ema5", "ema9", "ema21", "rsi", "adx", "atr_pct",
     "vwap", "volume_ratio", "orb_low", "orb_high", "distance_to_or_low",
+    # Broader-market (NIFTY 50 index) fields, for a "confirm this stock's
+    # signal against what the market as a whole is doing" condition —
+    # e.g. {"left": "nifty_ema9", "op": ">", "right": {"field": "nifty_ema21"}}
+    # for "only take this trade while NIFTY itself is trending up". NOT
+    # the current symbol's own values (those are the bare "ema9"/"adx"
+    # above) — computed once from NIFTY 50's own historical data and
+    # joined onto every symbol's snapshot by timestamp (backtest:
+    # runners/backtesting/engine.py; live: not yet wired, see that
+    # module's docstring). None wherever NIFTY's data doesn't cover a
+    # given bar — evaluate() already treats any None required field as
+    # "condition not met", same as every other field here.
+    "nifty_ema9", "nifty_ema21", "nifty_adx",
+    # Open interest, stock options only (see core/domain/models.py::
+    # Trade.entry_oi) — None wherever the underlying data has none
+    # (equity, index options), same "missing = condition not met"
+    # handling as every other field here.
+    "oi",
 )
 
 

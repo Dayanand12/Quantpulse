@@ -30,6 +30,7 @@ from core.application.interfaces.regime_call_repository import IRegimeCallReposi
 from core.application.interfaces.risk_engine import IRiskEngine
 from core.application.interfaces.strategy_registry import IStrategyRegistry
 from core.application.interfaces.strategy_source_repository import IStrategySourceRepository
+from core.application.interfaces.symbol_master_repository import ISymbolMasterRepository
 from core.application.interfaces.trade_repository import ITradeRepository
 from core.application.interfaces.trading_engine import ITradingEngine
 from core.application.interfaces.watchlist_repository import IWatchlistRepository
@@ -45,6 +46,7 @@ from infrastructure.persistence.database import create_session_factory
 from infrastructure.persistence.sql_charge_config_repository import SqlChargeConfigRepository
 from infrastructure.persistence.sql_deployment_repository import SqlDeploymentRepository
 from infrastructure.persistence.sql_regime_call_repository import SqlRegimeCallRepository
+from infrastructure.persistence.sql_symbol_master_repository import SqlSymbolMasterRepository
 from infrastructure.persistence.sql_trade_journal import SqlTradeJournal
 from infrastructure.persistence.sql_trade_repository import SqlTradeRepository
 from infrastructure.persistence.sql_watchlist_repository import SqlWatchlistRepository
@@ -106,6 +108,52 @@ class DeploymentRuntime:
     execution_manager: ExecutionManager
 
 
+def build_deployment_runtime(
+    deployment: Deployment,
+    live_engine: LiveEngine,
+    event_bus: IEventBus,
+    strategy_registry: IStrategyRegistry,
+    charge_config_repository: IChargeConfigRepository,
+) -> DeploymentRuntime:
+    """One running strategy instance's full stack: its own capital pool
+    (PaperBroker behind order_repository/portfolio_service) and its own
+    ExecutionManager. Extracted from build_container's loop so
+    server/main.py can call this for ONE deployment at create-time — hot,
+    without a restart — using exactly the same construction build_container
+    uses at startup, instead of a second, drifting copy of this logic."""
+
+    broker = PaperBroker(deployment.capital)
+    order_repository = PaperOrderRepository(
+        broker,
+        event_bus,
+        deployment.id,
+        deployment.strategy_name,
+        charge_config_repository=charge_config_repository,
+    )
+    portfolio_service = PaperPortfolioService(broker)
+    strategy = strategy_registry.get_strategy(deployment.strategy_name)
+
+    execution_manager = ExecutionManager(
+        live_engine,
+        order_repository,
+        strategy,
+        list(deployment.symbols),
+        quantity=deployment.config.quantity,
+        stoploss_pct=deployment.config.stoploss_pct,
+        target_pct=deployment.config.target_pct,
+        trailing_pct=deployment.config.trailing_pct,
+        max_cycles_per_day=deployment.config.max_cycles_per_day,
+        timeframe=deployment.config.timeframe,
+    )
+
+    return DeploymentRuntime(
+        deployment=deployment,
+        order_repository=order_repository,
+        portfolio_service=portfolio_service,
+        execution_manager=execution_manager,
+    )
+
+
 @dataclass
 class Container:
     """Everything the API layer and background workers depend on. Always
@@ -165,6 +213,11 @@ class Container:
     # by server/main.py's GET/PUT /api/settings/charges.
     charge_config_repository: IChargeConfigRepository
 
+    # NSE equity symbol master for typeahead suggestions (GET
+    # /api/symbols/search) — resynced on demand from Kite's instrument
+    # dump (POST /api/symbols/resync), independent of the watchlist itself.
+    symbol_master_repository: ISymbolMasterRepository
+
 
 def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Container:
     """The one function allowed to construct concrete infrastructure."""
@@ -179,13 +232,16 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
     trade_repository: ITradeRepository = SqlTradeRepository(session_factory)
     regime_call_repository: IRegimeCallRepository = SqlRegimeCallRepository(session_factory)
     charge_config_repository: IChargeConfigRepository = SqlChargeConfigRepository(session_factory)
+    symbol_master_repository: ISymbolMasterRepository = SqlSymbolMasterRepository(session_factory)
 
-    symbols = watchlist_repository.get_symbols()
-    if not symbols:
-        # First run: nothing saved yet — seed from the legacy stocks.json so
-        # the transition to a persisted watchlist doesn't lose anything.
-        symbols = load_stocks(settings.zerodha_stocks_file)
-        watchlist_repository.save_symbols(symbols)
+    if not watchlist_repository.list_watchlists():
+        # First run: nothing saved yet — seed a "Default" watchlist from
+        # the legacy stocks.json so the transition to persisted watchlists
+        # doesn't lose anything.
+        default_watchlist = watchlist_repository.create_watchlist("Default")
+        watchlist_repository.save_symbols(default_watchlist.id, load_stocks(settings.zerodha_stocks_file))
+
+    symbols = watchlist_repository.get_all_symbols()
 
     deployments = deployment_repository.list_deployments()
     if not deployments:
@@ -223,36 +279,9 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
         if not deployment.enabled:
             continue
 
-        broker = PaperBroker(deployment.capital)
-        order_repository = PaperOrderRepository(
-            broker,
-            event_bus,
-            deployment.id,
-            deployment.strategy_name,
-            charge_config_repository=charge_config_repository,
-        )
-        portfolio_service = PaperPortfolioService(broker)
-        strategy = strategy_registry.get_strategy(deployment.strategy_name)
-
-        execution_manager = ExecutionManager(
-            live_engine,
-            order_repository,
-            strategy,
-            list(deployment.symbols),
-            quantity=deployment.config.quantity,
-            stoploss_pct=deployment.config.stoploss_pct,
-            target_pct=deployment.config.target_pct,
-            trailing_pct=deployment.config.trailing_pct,
-            max_cycles_per_day=deployment.config.max_cycles_per_day,
-            timeframe=deployment.config.timeframe,
-        )
-
         deployment_runtimes.append(
-            DeploymentRuntime(
-                deployment=deployment,
-                order_repository=order_repository,
-                portfolio_service=portfolio_service,
-                execution_manager=execution_manager,
+            build_deployment_runtime(
+                deployment, live_engine, event_bus, strategy_registry, charge_config_repository
             )
         )
 
@@ -274,4 +303,5 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
         session_factory=session_factory,
         regime_call_repository=regime_call_repository,
         charge_config_repository=charge_config_repository,
+        symbol_master_repository=symbol_master_repository,
     )

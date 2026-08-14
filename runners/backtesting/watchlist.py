@@ -4,7 +4,7 @@ run_backtest.py (CLI) and backtest_server.py (API) so "the whole
 watchlist" means the same set of symbols in both.
 """
 
-from typing import List
+from typing import List, NamedTuple
 
 from infrastructure.config.settings import get_settings
 from infrastructure.persistence.database import create_session_factory
@@ -20,5 +20,28 @@ NON_TRADEABLE_WATCHLIST_SYMBOLS = {"NIFTY 50", "NIFTY BANK", "INDIA VIX"}
 def get_tradeable_watchlist_symbols() -> List[str]:
     settings = get_settings()
     session_factory = create_session_factory(settings.database_url)
-    symbols = SqlWatchlistRepository(session_factory).get_symbols()
+    symbols = SqlWatchlistRepository(session_factory).get_all_symbols()
     return [s for s in symbols if s not in NON_TRADEABLE_WATCHLIST_SYMBOLS]
+
+
+class TradeableWatchlist(NamedTuple):
+    id: int
+    name: str
+    symbols: List[str]
+
+
+def get_named_watchlists() -> List[TradeableWatchlist]:
+    """Every individual watchlist (not the union
+    get_tradeable_watchlist_symbols returns), each filtered to its own
+    tradeable symbols — lets the Backtest form offer "run on watchlist X"
+    as well as "run on everything"."""
+    settings = get_settings()
+    session_factory = create_session_factory(settings.database_url)
+    return [
+        TradeableWatchlist(
+            id=w.id,
+            name=w.name,
+            symbols=[s for s in w.symbols if s not in NON_TRADEABLE_WATCHLIST_SYMBOLS],
+        )
+        for w in SqlWatchlistRepository(session_factory).list_watchlists()
+    ]

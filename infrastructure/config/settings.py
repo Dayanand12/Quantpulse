@@ -55,6 +55,18 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # How stale the live tick feed has to be (GET /api/health,
+    # runners/paper_trading/feed_watchdog.py) before it's flagged as dead
+    # rather than just momentarily quiet.
+    feed_stale_threshold_seconds: int = 60
+
+    # Same reasoning as database_url/historical_data_dir — kept outside the
+    # OneDrive-synced repo folder so a continuously-appended log file isn't
+    # fighting cloud sync. This is also what makes an incident like a
+    # silently-frozen background thread diagnosable after the fact instead
+    # of only visible in a live terminal window nobody's watching.
+    log_dir: str = "C:/Trading/QuantPulse/logs"
+
     # 24h "HH:MM" — when the background scheduler writes the end-of-day
     # trades/metrics report (backend/eod_report.py). Only fires while the
     # backend process is running at that time.

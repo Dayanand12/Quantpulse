@@ -9,6 +9,12 @@ import type { CandleTimeframe, EquityPoint, PerformanceMetrics, StrategyBreakdow
 
 export type { StrategyInfo }
 
+export interface NamedWatchlist {
+  id: number
+  name: string
+  symbols: string[]
+}
+
 export interface BacktestTrade {
   symbol: string
   side: "BUY" | "SELL"
@@ -20,6 +26,10 @@ export interface BacktestTrade {
   charges: number | null
   net_pnl: number | null
   market_condition: string | null
+  // Open interest at entry — stock options only (see core/domain/
+  // models.py::Trade.entry_oi). null for equity, index options, and
+  // trades logged before this field existed.
+  entry_oi: number | null
 }
 
 export interface BacktestRunConfig {
@@ -52,7 +62,123 @@ export interface BacktestRunResult {
   by_symbol: StrategyBreakdown[]
   by_market_condition: StrategyBreakdown[]
   by_side: StrategyBreakdown[]
-  saved_result_id: number
+  // Low/Medium/High tercile split by entry_oi — only meaningful for
+  // stock-option runs (see runners/backtesting/result_persistence.py::
+  // oi_level_breakdown_rows); [] for equity/index-option runs.
+  by_oi_level: StrategyBreakdown[]
+  // One stored result PER SYMBOL, not one combined row for the whole
+  // request — see runners/backtesting/result_persistence.py::
+  // save_per_symbol_results. Keyed by symbol.
+  saved_result_ids: Record<string, number>
+  // Non-fatal issues worth surfacing (currently: --quantity isn't a whole
+  // multiple of an option contract's real lot size — see
+  // runners/backtesting/historical_loader.py::validate_lot_multiple).
+  // Always present for an options run; omitted (not just empty) for a
+  // plain equity run against an older backend, so `warnings ?? []` at the
+  // call site covers both.
+  warnings?: string[]
+  // Present only for a rolling-ATM result (see RollingAtmPanel.tsx /
+  // backtest_server.py's /api/backtest/options/rolling-atm) — one entry
+  // per expiry rolled through, so the strike choice at every roll point
+  // is auditable instead of a black box.
+  roll_log?: RollEvent[]
+}
+
+export interface RollEvent {
+  expiry: string
+  symbol: string | null
+  strike: number | null
+  spot_at_roll: number | null
+  note: string
+}
+
+export interface RollingAtmRequest {
+  strategy: string
+  underlying: string
+  category: string
+  side: "CE" | "PE"
+  timeframe: CandleTimeframe
+  quantity: number
+  stoploss_pct: number
+  target_pct: number
+  trailing_pct: number
+  max_cycles_per_day: number
+  start_time: string
+  end_time: string
+  capital: number
+  charges: boolean
+  date_from?: string
+  date_to?: string
+}
+
+// One option contract's identity + the exact `symbol` string backtest_
+// server.py's /api/backtest/run(-batch) expects — see core/domain/
+// models.py::OptionContract. category distinguishes the two folders a
+// contract's data can live under (stock vs index options).
+export interface OptionUnderlying {
+  underlying: string
+  category: "stocks" | "index"
+}
+
+export interface OptionContractInfo {
+  strike: number
+  side: "CE" | "PE"
+  symbol: string
+}
+
+// One strategy + one risk/sizing config run against every contract for an
+// underlying — backtest_server.py's /api/backtest/options/chain-sweep*,
+// backed by core/domain/chain_sweep.py. Background job, same "survives a
+// browser close" shape as BatchJob, since a full chain can be hundreds to
+// low thousands of contracts.
+export type ChainSweepContractStatus = "pending" | "running" | "done" | "skipped" | "error"
+export type ChainSweepStatus = "pending" | "running" | "done" | "failed"
+
+export interface ChainSweepContractResult {
+  symbol: string
+  status: ChainSweepContractStatus
+  saved_result_id: number | null
+  error: string | null
+  total_trades: number | null
+  total_pnl: number | null
+  win_rate: number | null
+  profit_factor: number | null
+}
+
+export interface ChainSweep {
+  id: number
+  strategy_name: string
+  underlying: string
+  category: "stocks" | "index"
+  expiry_filter: string | null
+  status: ChainSweepStatus
+  shared_config: Record<string, unknown>
+  total_contracts: number
+  processed_contracts: number
+  contracts: ChainSweepContractResult[]
+  error: string | null
+  created_at: string | null
+  finished_at: string | null
+  warnings: string[]
+}
+
+export interface ChainSweepRequest {
+  strategy: string
+  underlying: string
+  category: string
+  expiry?: string
+  timeframe: CandleTimeframe
+  quantity: number
+  stoploss_pct: number
+  target_pct: number
+  trailing_pct: number
+  max_cycles_per_day: number
+  start_time: string
+  end_time: string
+  capital: number
+  charges: boolean
+  date_from?: string
+  date_to?: string
 }
 
 export const DEFAULT_BACKTEST_CONFIG: BacktestRunConfig = {
@@ -80,6 +206,13 @@ export interface BacktestResultSummary {
   id: number
   strategy_name: string
   symbols: string // sorted comma-joined list, or "WATCHLIST"
+  // Parsed from `symbols` server-side (see backtest_server.py::
+  // _option_identity) whenever it's an OptionContract.symbol string — all
+  // four null together for an equity/watchlist result.
+  option_underlying: string | null
+  option_strike: number | null
+  option_expiry: string | null // "YYYY-MM-DD"
+  option_side: "CE" | "PE" | null
   timeframe: string
   date_from: string
   date_to: string
@@ -162,7 +295,9 @@ export interface BatchPanelResult {
   by_symbol: StrategyBreakdown[]
   by_market_condition: StrategyBreakdown[]
   by_side: StrategyBreakdown[]
-  saved_result_id?: number
+  by_oi_level: StrategyBreakdown[]
+  // One stored result PER SYMBOL — see BacktestRunResult.saved_result_ids.
+  saved_result_ids?: Record<string, number>
 }
 
 export interface BatchRunResponse {
@@ -217,7 +352,7 @@ export interface BacktestResultDetail {
   // Same shape as BacktestRunResult minus `trades`/`trades_truncated` —
   // stored results never keep the raw trade log (see
   // backtest_server.py's /api/backtest/run).
-  result: Omit<BacktestRunResult, "trades" | "trades_truncated" | "saved_result_id"> & {
+  result: Omit<BacktestRunResult, "trades" | "trades_truncated" | "saved_result_ids"> & {
     capital: number
   }
 }

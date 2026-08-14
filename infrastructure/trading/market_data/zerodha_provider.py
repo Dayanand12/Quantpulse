@@ -6,7 +6,8 @@ domain Tick objects.
 """
 
 import datetime as dt
-from typing import Dict, List
+import time
+from typing import Dict, List, Optional
 
 from core.application.interfaces.market_data_provider import IMarketDataProvider
 from core.domain.models import Tick
@@ -20,6 +21,14 @@ class ZerodhaMarketDataProvider(IMarketDataProvider):
 
     def start(self, symbols: List[str]) -> None:
         self._client.start_live_data(symbols, self._exchange)
+
+    def add_symbol(self, symbol: str) -> None:
+        self._client.add_symbol(symbol, self._exchange)
+
+    def seconds_since_last_tick(self) -> Optional[float]:
+        if self._client.last_tick_at is None:
+            return None
+        return time.time() - self._client.last_tick_at
 
     def get_latest_ticks(self) -> Dict[str, Tick]:
         now = dt.datetime.now()

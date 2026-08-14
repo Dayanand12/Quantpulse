@@ -7,15 +7,28 @@ rather than creating a duplicate.
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from core.application.interfaces.backtest_result_repository import IBacktestResultRepository
 from core.domain.backtest_result import BacktestResult, BacktestRunParams
+from core.domain.models import OptionContract
 from infrastructure.persistence.database import unit_of_work
 from infrastructure.persistence.models import BacktestResultRecord
+
+
+def _parse_option_identity(symbols: str) -> Tuple[Optional[str], Optional[float], Optional[Any], Optional[str]]:
+    """(underlying, strike, expiry, side), all None if `symbols` isn't an
+    OptionContract.symbol string — e.g. a plain equity ticker or the
+    "WATCHLIST" sentinel. Parsed once here at save time rather than left
+    for every read, same reasoning as the migration backfill."""
+    try:
+        contract = OptionContract.parse(symbols)
+    except (ValueError, IndexError):
+        return None, None, None, None
+    return contract.underlying, contract.strike, contract.expiry, contract.side
 
 
 def _record_to_result(record: BacktestResultRecord) -> BacktestResult:
@@ -74,10 +87,15 @@ class SqlBacktestResultRepository(IBacktestResultRepository):
             # default=str covers any date/datetime that slips through
             # without every caller having to pre-serialize its own dict.
             result_json = json.dumps(result, default=str)
+            underlying, strike, expiry, side = _parse_option_identity(params.symbols)
 
             if existing is not None:
                 existing.result_json = result_json
                 existing.updated_at = now
+                existing.option_underlying = underlying
+                existing.option_strike = strike
+                existing.option_expiry = expiry
+                existing.option_side = side
                 record = existing
             else:
                 record = BacktestResultRecord(
@@ -98,6 +116,10 @@ class SqlBacktestResultRepository(IBacktestResultRepository):
                     result_json=result_json,
                     created_at=now,
                     updated_at=now,
+                    option_underlying=underlying,
+                    option_strike=strike,
+                    option_expiry=expiry,
+                    option_side=side,
                 )
                 session.add(record)
 
@@ -123,3 +145,29 @@ class SqlBacktestResultRepository(IBacktestResultRepository):
             record = session.get(BacktestResultRecord, result_id)
             if record is not None:
                 session.delete(record)
+
+    def list_option_results(self, strategy_name: str, underlying: Optional[str] = None) -> List[BacktestResult]:
+        with unit_of_work(self._session_factory) as session:
+            query = select(BacktestResultRecord).where(
+                BacktestResultRecord.strategy_name == strategy_name,
+                BacktestResultRecord.option_underlying.is_not(None),
+            )
+            if underlying:
+                query = query.where(BacktestResultRecord.option_underlying == underlying.upper())
+            records = session.execute(
+                query.order_by(BacktestResultRecord.updated_at.desc())
+            ).scalars().all()
+            return [_record_to_result(r) for r in records]
+
+    def list_option_underlyings(self, strategy_name: str) -> List[str]:
+        with unit_of_work(self._session_factory) as session:
+            rows = session.execute(
+                select(BacktestResultRecord.option_underlying)
+                .where(
+                    BacktestResultRecord.strategy_name == strategy_name,
+                    BacktestResultRecord.option_underlying.is_not(None),
+                )
+                .distinct()
+                .order_by(BacktestResultRecord.option_underlying)
+            ).scalars().all()
+            return list(rows)

@@ -36,6 +36,14 @@ def make_df(days_and_bars):
     return pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime))
 
 
+def make_option_df(days_and_bars):
+    """Same as make_df but with an `oi` column present — mirrors
+    historical_loader.load_option_csv's shape, oi rising 100 per bar so
+    each bucket's `.last()` is distinguishable from its neighbors."""
+    df = make_df(days_and_bars)
+    return df.with_columns((pl.arange(0, df.height).cast(pl.Float64) * 100 + 5000).alias("oi"))
+
+
 def test_returns_expected_columns():
     df = make_df([(dt.date(2026, 1, 5), 40, 100.0)])
 
@@ -43,8 +51,10 @@ def test_returns_expected_columns():
 
     assert snap.columns == [
         "date", "ltp", "high", "low", "ema5", "ema9", "ema21", "rsi", "adx", "atr_pct",
-        "vwap", "volume_ratio", "orb_low", "orb_high", "distance_to_or_low",
+        "vwap", "volume_ratio", "orb_low", "orb_high", "distance_to_or_low", "oi",
     ]
+    # No `oi` column in the input (equity data) -> always None in the output.
+    assert snap["oi"].null_count() == snap.height
 
 
 def test_drops_warmup_bars_below_minimum():
@@ -190,3 +200,41 @@ def test_extra_indicators_present_even_when_below_warmup_minimum():
 
     assert "ema_20" in snap.columns
     assert snap.height == 0
+
+
+def test_oi_passes_through_at_1minute():
+    df = make_option_df([(dt.date(2026, 1, 5), 40, 100.0)])
+
+    snap = build_snapshot_series(df, timeframe_minutes=1)
+
+    # 1-minute bars: each row's oi is exactly that bar's own raw oi value
+    # (base_df["oi"][24:], since the first 24 warm-up bars are dropped).
+    expected = df["oi"].to_list()[24:]
+    assert snap["oi"].to_list() == expected
+
+
+def test_oi_resamples_with_last_value_per_bucket():
+    # 150 bars of 1-minute data (30 five-minute buckets) with oi rising
+    # every bar -> resampling to 5-minute buckets should carry each
+    # bucket's LAST raw oi value, same 09:15-aligned bucket boundaries
+    # LiveEngine._resample uses, not an average or a first-value pick.
+    # The first 24 buckets are dropped by the _MIN_BARS warm-up, so the
+    # first surviving output row is bucket index 24: raw minute-offsets
+    # 120-124, whose last is raw_oi[124].
+    df = make_option_df([(dt.date(2026, 1, 5), 150, 100.0)])
+
+    snap = build_snapshot_series(df, timeframe_minutes=5)
+
+    raw_oi = df["oi"].to_list()
+    first_bucket_oi = snap["oi"].to_list()[0]
+    assert first_bucket_oi == raw_oi[124]
+
+
+def test_oi_is_none_when_source_has_no_oi_column():
+    # Equity data (no oi column at all) -> oi is always None in the
+    # output, never a missing column, so callers never need to branch.
+    df = make_df([(dt.date(2026, 1, 5), 40, 100.0)])
+
+    snap = build_snapshot_series(df, timeframe_minutes=5)
+
+    assert snap["oi"].null_count() == snap.height

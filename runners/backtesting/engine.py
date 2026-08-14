@@ -19,8 +19,9 @@ was actually touched mid-bar would be silently skipped).
 """
 
 import datetime as dt
+import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import polars as pl
 
@@ -31,8 +32,45 @@ from core.domain.market_condition import classify_market_condition
 from core.domain.models import StrategyConfig, Trade
 from core.domain.indicator_registry import IndicatorSpec
 from core.domain.strategy_conditions import VALID_SNAPSHOT_FIELDS
+from infrastructure.config.settings import get_settings
+from runners.backtesting.historical_loader import load_equity_csv
 from runners.backtesting.snapshot_builder import build_snapshot_series
 from runners.paper_trading.live_engine import SUPPORTED_TIMEFRAMES
+
+# The one broader-market symbol a strategy's conditions.json can reference
+# via the nifty_* snapshot fields (core/domain/strategy_conditions.py) —
+# e.g. "only go long while NIFTY itself is trending up". Hardcoded rather
+# than configurable: nothing has asked for a different index yet, and
+# adding that is a small extension of _regime_snapshot_series below if it
+# ever comes up.
+_REGIME_SYMBOL = "NIFTY 50"
+
+# NIFTY 50's own snapshot series, computed once per timeframe and reused
+# across every symbol/strategy backtest in this process — its file is
+# ~1M rows, far too expensive to reload and re-resample on every single
+# run_backtest() call. Keyed by timeframe_minutes; a cached None means
+# "checked, the file genuinely isn't there" — `in` (not truthiness) is
+# what distinguishes that from "never checked yet", so a missing file
+# doesn't get retried on every call either.
+_regime_cache: Dict[int, Optional[pl.DataFrame]] = {}
+
+
+def _regime_snapshot_series(timeframe_minutes: int) -> Optional[pl.DataFrame]:
+    if timeframe_minutes in _regime_cache:
+        return _regime_cache[timeframe_minutes]
+
+    csv_path = os.path.join(get_settings().historical_data_dir, f"{_REGIME_SYMBOL}_historical.csv")
+    try:
+        regime_df = load_equity_csv(csv_path)
+    except FileNotFoundError:
+        _regime_cache[timeframe_minutes] = None
+        return None
+
+    bars = build_snapshot_series(regime_df, timeframe_minutes).select(
+        "date", "ema9", "ema21", "adx",
+    ).rename({"ema9": "nifty_ema9", "ema21": "nifty_ema21", "adx": "nifty_adx"})
+    _regime_cache[timeframe_minutes] = bars
+    return bars
 
 # Keys forwarded to IStrategy.screen() — exactly LiveEngine.get_snapshot()'s
 # per-symbol shape (see live_engine.py::_update_snapshot). `high`/`low`
@@ -131,6 +169,25 @@ def run_backtest(
     timeframe_minutes = SUPPORTED_TIMEFRAMES[config.timeframe]
     bars = build_snapshot_series(base_df, timeframe_minutes, extra_indicators=extra_indicators)
 
+    # nifty_ema9/nifty_ema21/nifty_adx (core/domain/strategy_conditions.py's
+    # VALID_SNAPSHOT_FIELDS) — joined by exact bar timestamp, so this can
+    # never leak a later NIFTY bar into an earlier stock bar: each side's
+    # own indicator series is already causally correct (build_snapshot_series
+    # never looks ahead), and aligning two already-correct series by their
+    # shared timestamp doesn't introduce new lookahead. A bar with no
+    # matching NIFTY date (e.g. outside NIFTY's covered range) just gets
+    # None for these three columns — ConditionSet.evaluate() already treats
+    # any None required field as "condition not met", same as every other
+    # snapshot field. Skipped entirely when backtesting NIFTY 50 itself.
+    if symbol != _REGIME_SYMBOL:
+        regime_bars = _regime_snapshot_series(timeframe_minutes)
+        if regime_bars is not None:
+            bars = bars.join(regime_bars, on="date", how="left")
+    if "nifty_ema9" not in bars.columns:
+        bars = bars.with_columns(
+            pl.lit(None, dtype=pl.Float64).alias(c) for c in ("nifty_ema9", "nifty_ema21", "nifty_adx")
+        )
+
     if date_from is not None:
         bars = bars.filter(pl.col("date").dt.date() >= date_from)
     if date_to is not None:
@@ -196,6 +253,7 @@ def run_backtest(
                     entry_atr_pct=snap.get("atr_pct"),
                     entry_vwap=snap.get("vwap"),
                     entry_volume_ratio=snap.get("volume_ratio"),
+                    entry_oi=snap.get("oi"),
                     market_condition=classify_market_condition(
                         ltp=snap.get("ltp"), adx=snap.get("adx"),
                         vwap=snap.get("vwap"), volume_ratio=snap.get("volume_ratio"),

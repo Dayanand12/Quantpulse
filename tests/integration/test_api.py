@@ -43,11 +43,13 @@ def build_test_app(tmp_path, symbols=DEFAULT_SYMBOLS):
 
     session_factory = create_session_factory(database_url)
     Base.metadata.create_all(session_factory().get_bind())
-    # Pre-seed the watchlist so build_container's first-run seeding (which
+    # Pre-seed a watchlist so build_container's first-run seeding (which
     # falls back to reading the real Data_ingestion/stocks.json) never
     # kicks in — keeps this test isolated from that file's contents. This
     # also means build_container seeds Deployment 1 from these symbols.
-    SqlWatchlistRepository(session_factory).save_symbols(list(symbols))
+    watchlist_repo = SqlWatchlistRepository(session_factory)
+    default_watchlist = watchlist_repo.create_watchlist("Default")
+    watchlist_repo.save_symbols(default_watchlist.id, list(symbols))
 
     settings = Settings(
         environment=Environment.TESTING, initial_capital=100_000, database_url=database_url
@@ -187,33 +189,139 @@ def test_market_ticker_shows_ltp_without_change_when_prev_close_missing(tmp_path
     assert entry["change_pct"] is None
 
 
-def test_watchlist_get_reflects_seeded_symbols(tmp_path):
+def test_watchlists_list_reflects_seeded_symbols(tmp_path):
     app, _ = build_test_app(tmp_path, symbols=["RELIANCE", "TCS", "INFY"])
 
     with TestClient(app) as client:
-        body = client.get("/api/watchlist").json()
+        body = client.get("/api/watchlists").json()
 
-    assert body == {"symbols": ["RELIANCE", "TCS", "INFY"]}
+    assert len(body) == 1
+    assert body[0]["name"] == "Default"
+    assert body[0]["symbols"] == ["RELIANCE", "TCS", "INFY"]
 
 
-def test_watchlist_put_saves_and_cleans_input(tmp_path):
+def test_watchlist_create_rename_and_update_symbols(tmp_path):
     app, _ = build_test_app(tmp_path)
 
     with TestClient(app) as client:
-        res = client.put("/api/watchlist", json={"symbols": ["reliance", " reliance ", "tcs"]})
-        assert res.status_code == 200
-        assert res.json() == {"symbols": ["RELIANCE", "TCS"]}
+        created = client.post("/api/watchlists", json={"name": "Bank Stocks"})
+        assert created.status_code == 201
+        watchlist_id = created.json()["id"]
+        assert created.json()["symbols"] == []
 
-        assert client.get("/api/watchlist").json() == {"symbols": ["RELIANCE", "TCS"]}
+        renamed = client.put(f"/api/watchlists/{watchlist_id}", json={"name": "Banking"})
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "Banking"
+
+        updated = client.put(
+            f"/api/watchlists/{watchlist_id}/symbols",
+            json={"symbols": ["hdfcbank", " hdfcbank ", "icicibank"]},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["symbols"] == ["HDFCBANK", "ICICIBANK"]
 
 
-def test_watchlist_put_rejects_empty_list(tmp_path):
+def test_watchlist_create_rejects_duplicate_name(tmp_path):
     app, _ = build_test_app(tmp_path)
 
     with TestClient(app) as client:
-        res = client.put("/api/watchlist", json={"symbols": ["", "   "]})
+        client.post("/api/watchlists", json={"name": "Default"})
+        res = client.post("/api/watchlists", json={"name": "Default"})
 
     assert res.status_code == 400
+
+
+def test_watchlist_symbols_put_rejects_empty_list(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        watchlist_id = client.get("/api/watchlists").json()[0]["id"]
+        res = client.put(f"/api/watchlists/{watchlist_id}/symbols", json={"symbols": ["", "   "]})
+
+    assert res.status_code == 400
+
+
+def test_watchlist_delete_removes_it(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        second = client.post("/api/watchlists", json={"name": "Second"}).json()
+
+        res = client.delete(f"/api/watchlists/{second['id']}")
+        assert res.status_code == 200
+
+        assert [w["name"] for w in client.get("/api/watchlists").json()] == ["Default"]
+
+
+def test_watchlist_symbols_put_hot_adds_new_symbol_to_live_engine(tmp_path):
+    app, container = build_test_app(tmp_path, symbols=["RELIANCE"])
+    watchlist_id = container.watchlist_repository.list_watchlists()[0].id
+    assert "TCS" not in container.live_engine.data  # not tracked yet
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/api/watchlists/{watchlist_id}/symbols", json={"symbols": ["RELIANCE", "TCS"]}
+        )
+        assert res.status_code == 200
+
+    # Hot-added synchronously (server/main.py::update_watchlist_symbols +
+    # runners/paper_trading/hot_add.py) — no restart needed for the new
+    # symbol to get data/or_data/indicator_snapshot slots.
+    assert "TCS" in container.live_engine.data
+
+
+def test_watchlist_symbols_put_does_not_re_add_already_tracked_symbols(tmp_path):
+    app, container = build_test_app(tmp_path, symbols=["RELIANCE", "TCS"])
+    watchlist_id = container.watchlist_repository.list_watchlists()[0].id
+    original_data_object = container.live_engine.data["RELIANCE"]
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/api/watchlists/{watchlist_id}/symbols", json={"symbols": ["RELIANCE", "TCS"]}
+        )
+        assert res.status_code == 200
+
+    # Same object still — hot-add is a no-op for symbols already tracked,
+    # never resets an existing symbol's accumulated candle data.
+    assert container.live_engine.data["RELIANCE"] is original_data_object
+
+
+def test_watchlist_delete_rejects_the_last_remaining_watchlist(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        only_id = client.get("/api/watchlists").json()[0]["id"]
+        res = client.delete(f"/api/watchlists/{only_id}")
+
+    assert res.status_code == 400
+
+
+def test_symbol_search_returns_empty_before_any_resync(tmp_path):
+    app, _ = build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.get("/api/symbols/search?q=REL")
+
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_symbol_resync_populates_search_from_kite_instruments(tmp_path):
+    app, container = build_test_app(tmp_path)
+    container.zerodha_client.kite.instruments.return_value = [
+        {"tradingsymbol": "RELIANCE", "name": "Reliance Industries Ltd", "instrument_type": "EQ"},
+        {"tradingsymbol": "RELIANCE-BE", "name": "Reliance Industries Ltd", "instrument_type": "EQ"},
+        {"tradingsymbol": "RELFUT", "name": "Reliance Futures", "instrument_type": "FUT"},
+    ]
+
+    with TestClient(app) as client:
+        resync = client.post("/api/symbols/resync")
+        assert resync.status_code == 200
+        assert resync.json() == {"count": 2}  # the FUT row is filtered out
+
+        results = client.get("/api/symbols/search?q=RELIANCE").json()
+
+    assert {r["tradingsymbol"] for r in results} == {"RELIANCE", "RELIANCE-BE"}
 
 
 def test_charge_config_get_returns_defaults_when_nothing_saved(tmp_path):
@@ -478,7 +586,7 @@ def test_trade_counts_survive_a_simulated_broker_restart(tmp_path):
     assert status["gross_realized_pnl"] == 250.0
 
 
-def test_create_deployment_succeeds_and_is_not_yet_running(tmp_path):
+def test_create_deployment_succeeds_and_starts_running_immediately(tmp_path):
     app, container = build_test_app(tmp_path)
 
     with TestClient(app) as client:
@@ -489,13 +597,14 @@ def test_create_deployment_succeeds_and_is_not_yet_running(tmp_path):
         assert body["symbols"] == ["RELIANCE"]
         assert body["capital"] == 30_000
 
-        # Restart-to-apply: persisted immediately, but no runtime exists
-        # for it until the process restarts and build_container runs again.
+        # Hot: a new deployment gets a live ExecutionManager immediately,
+        # no restart needed (server/main.py::_sync_deployment_runtime).
         listed = {d["id"]: d for d in client.get("/api/deployments").json()}
-        assert listed[body["id"]]["running"] is False
-        assert listed[body["id"]]["status"] is None
+        assert listed[body["id"]]["running"] is True
+        assert listed[body["id"]]["status"] is not None
 
     assert len(container.deployment_repository.list_deployments()) == 2
+    assert len(container.deployment_runtimes) == 2
 
 
 def test_create_deployment_rejects_unknown_strategy(tmp_path):
@@ -652,12 +761,100 @@ def test_update_unknown_deployment_returns_404(tmp_path):
 def test_delete_deployment_removes_it(tmp_path):
     app, container = build_test_app(tmp_path)
     seeded_id = container.deployment_repository.list_deployments()[0].id
+    assert len(container.deployment_runtimes) == 1  # seeded deployment starts running hot
 
     with TestClient(app) as client:
         res = client.delete(f"/api/deployments/{seeded_id}")
         assert res.status_code == 200
 
     assert container.deployment_repository.get_deployment(seeded_id) is None
+    # Stopped live too, not just gone from the next restart onward — see
+    # server/main.py::delete_deployment.
+    assert container.deployment_runtimes == []
+
+
+def test_update_deployment_hot_reloads_execution_manager_in_place(tmp_path):
+    app, container = build_test_app(tmp_path, symbols=["RELIANCE", "TCS"])
+    seeded_id = container.deployment_repository.list_deployments()[0].id
+    runtime = next(rt for rt in container.deployment_runtimes if rt.deployment.id == seeded_id)
+    original_execution_manager = runtime.execution_manager
+    # Simulate an open position's tracked exit levels — mutating in place
+    # (not replacing the ExecutionManager) is what's supposed to keep this
+    # intact across a live edit.
+    original_execution_manager.trade_state["RELIANCE"] = {
+        "stop_loss": 100.0, "target": 90.0, "trail_price": 95.0,
+    }
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/api/deployments/{seeded_id}",
+            json=make_deployment_payload(quantity=99, symbols=["RELIANCE", "TCS"]),
+        )
+        assert res.status_code == 200
+
+    updated_runtime = next(rt for rt in container.deployment_runtimes if rt.deployment.id == seeded_id)
+    assert updated_runtime.execution_manager is original_execution_manager
+    assert updated_runtime.execution_manager.quantity == 99
+    assert updated_runtime.execution_manager.trade_state["RELIANCE"]["stop_loss"] == 100.0
+
+
+def test_update_deployment_disabling_stops_the_live_runtime(tmp_path):
+    app, container = build_test_app(tmp_path)
+    seeded_id = container.deployment_repository.list_deployments()[0].id
+    assert len(container.deployment_runtimes) == 1
+
+    with TestClient(app) as client:
+        res = client.put(f"/api/deployments/{seeded_id}", json=make_deployment_payload(enabled=False))
+        assert res.status_code == 200
+        assert res.json()["enabled"] is False
+
+    assert container.deployment_runtimes == []
+
+
+def test_update_deployment_re_enabling_starts_it_again(tmp_path):
+    app, container = build_test_app(tmp_path)
+    seeded_id = container.deployment_repository.list_deployments()[0].id
+
+    with TestClient(app) as client:
+        client.put(f"/api/deployments/{seeded_id}", json=make_deployment_payload(enabled=False))
+        assert container.deployment_runtimes == []
+
+        res = client.put(f"/api/deployments/{seeded_id}", json=make_deployment_payload(enabled=True))
+        assert res.status_code == 200
+
+    assert len(container.deployment_runtimes) == 1
+
+
+def test_update_deployment_changing_strategy_stops_rather_than_hot_swaps(tmp_path):
+    app, container = build_test_app(tmp_path)
+    seeded_id = container.deployment_repository.list_deployments()[0].id
+    assert len(container.deployment_runtimes) == 1  # seeded deployment starts running hot
+
+    second_strategy_source = MINIMAL_ORB_STRATEGY_SOURCE.replace(
+        'name = "orb_reversal"', 'name = "orb_reversal_v2"'
+    ).replace("class TestOrbStrategy", "class TestOrbStrategyV2")
+    (tmp_path / "registry_strategies" / "orb_reversal_v2.py").write_text(
+        second_strategy_source, encoding="utf-8"
+    )
+    # FileStrategyRegistry discovers *.py files once at construction — see
+    # infrastructure/strategies/file_strategy_registry.py — so the new
+    # file needs a fresh registry instance to be visible.
+    container.strategy_registry = FileStrategyRegistry(tmp_path / "registry_strategies")
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/api/deployments/{seeded_id}",
+            json=make_deployment_payload(strategy_name="orb_reversal_v2"),
+        )
+        assert res.status_code == 200
+        listed = {d["id"]: d for d in client.get("/api/deployments").json()}
+        # DB says the new strategy; the live runtime is stopped rather
+        # than silently running under the OLD strategy's logic with a
+        # freshly-reset broker — see _sync_deployment_runtime's docstring.
+        assert listed[seeded_id]["strategy_name"] == "orb_reversal_v2"
+        assert listed[seeded_id]["running"] is False
+
+    assert container.deployment_runtimes == []
 
 
 def test_analytics_summary_with_no_trades_returns_empty_but_valid_shape(tmp_path):

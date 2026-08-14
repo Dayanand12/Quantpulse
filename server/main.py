@@ -26,7 +26,7 @@ from services.eod_report import generate_all_time_report, generate_eod_report
 from services.market_analysis_engine import MarketAnalysisEngine
 from services.report_generator import generate_report
 from core.application.interfaces.trade_repository import TradeFilter
-from core.container import Container
+from core.container import Container, build_deployment_runtime
 from core.domain.regime_classification import classify_regime, classify_screens
 from core.domain.metrics import (
     compute_performance_metrics,
@@ -40,16 +40,25 @@ from core.domain.metrics import (
     strategy_correlation,
     strategy_trend,
 )
+from core.application.interfaces.symbol_master_repository import SymbolSuggestion
 from core.domain.charges import ChargeConfig
-from core.domain.models import Deployment, StrategyConfig
+from core.domain.models import Deployment, StrategyConfig, Watchlist
 from core.exceptions import NotFoundError, ValidationError, register_exception_handlers
 from infrastructure.config.settings import Settings
+from infrastructure.logging.logger import get_logger
+from runners.paper_trading.hot_add import hot_add_symbol
 from runners.paper_trading.live_engine import SUPPORTED_TIMEFRAMES
 from server.serializers import position_to_dict, snapshot_map_to_dict, trade_to_dict
 from server.ws_manager import ConnectionManager
 
+logger = get_logger(__name__)
 
-class WatchlistUpdateRequest(BaseModel):
+
+class WatchlistNameRequest(BaseModel):
+    name: str
+
+
+class WatchlistSymbolsRequest(BaseModel):
     symbols: List[str]
 
 
@@ -120,6 +129,10 @@ def _deployment_to_dict(deployment: Deployment) -> dict:
     }
 
 
+def _watchlist_to_dict(watchlist: Watchlist) -> dict:
+    return {"id": watchlist.id, "name": watchlist.name, "symbols": list(watchlist.symbols)}
+
+
 def create_app(container: Container, settings: Settings) -> FastAPI:
 
     analysis_engine = MarketAnalysisEngine(container.zerodha_client, container.regime_call_repository)
@@ -130,11 +143,24 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
         if body.strategy_name not in strategy_names:
             raise ValidationError(f"Unknown strategy: {body.strategy_name}")
 
+        # test_always_long/test_always_short etc. are debug scaffolding
+        # (enter every symbol unconditionally — see their own docstrings)
+        # meant for a quick manual check, not to be left running. One of
+        # these sat enabled for days and was the entire source of the
+        # 2026-08-11 "100 open positions" incident. Still creatable
+        # disabled, for the manual check they're actually for.
+        if body.strategy_name.startswith("test_") and body.enabled:
+            raise ValidationError(
+                f"'{body.strategy_name}' is debug scaffolding, not a real strategy — "
+                "create it with enabled=false if you're deliberately verifying paper "
+                "trading works, and disable it again once you're done."
+            )
+
         cleaned = list(dict.fromkeys(s.strip().upper() for s in body.symbols if s.strip()))
         if not cleaned:
             raise ValidationError("Deployment must include at least one symbol.")
 
-        watchlist = set(container.watchlist_repository.get_symbols())
+        watchlist = set(container.watchlist_repository.get_all_symbols())
         unknown = [s for s in cleaned if s not in watchlist]
         if unknown:
             raise ValidationError(
@@ -287,7 +313,7 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
         ticks = container.market_data_provider.get_latest_ticks()
 
         result = dict(indicator_snapshot)
-        for symbol in container.watchlist_repository.get_symbols():
+        for symbol in container.watchlist_repository.get_all_symbols():
             if symbol in result:
                 continue
             tick = ticks.get(symbol)
@@ -351,6 +377,20 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             "service": "QuantPulse API",
             "ui": "python run_dev.py starts both backend and frontend; open http://localhost:5173",
             "docs": "/docs",
+        }
+
+    # -----------------------------
+    # REST: feed health — is the live tick stream actually alive, not just
+    # "is the server responding to HTTP" (those are independent: the
+    # 2026-08-11 incident had a fully responsive server with a dead feed
+    # for hours, undetectable from outside without this).
+    # -----------------------------
+    @app.get("/api/health")
+    def health():
+        staleness = container.market_data_provider.seconds_since_last_tick()
+        return {
+            "feed_seconds_since_last_tick": staleness,
+            "feed_stale": staleness is not None and staleness > settings.feed_stale_threshold_seconds,
         }
 
     # -----------------------------
@@ -573,6 +613,71 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
 
         return result
 
+    def _sync_deployment_runtime(deployment: Deployment) -> None:
+        """Make the in-memory live engine match `deployment`'s just-saved
+        DB row — no restart needed for most fields. capital is the one
+        exception: a running PaperBroker's pool size is fixed at
+        construction, so a changed value here only takes effect on the
+        next restart (same as every field did before this existed).
+
+        strategy_name changing on an ALREADY-RUNNING deployment stops it
+        rather than hot-swapping its logic — an ExecutionManager's `side`
+        is cached from the strategy at construction and never re-derived
+        (execution_manager.py), and any currently-open position's
+        trade_state was computed under the OLD strategy's assumptions.
+        Rebuilding fresh here would mean a brand-new, empty PaperBroker
+        silently abandoning whatever was open, with no visible sign that
+        happened — stopping it (shows running=false) until restart is the
+        honest alternative.
+        """
+        existing = next(
+            (rt for rt in container.deployment_runtimes if rt.deployment.id == deployment.id), None
+        )
+
+        if existing is not None and existing.deployment.strategy_name != deployment.strategy_name:
+            # In-place mutation, not a rebind — run_deployments (see
+            # runners/paper_trading/deployment_runner.py) holds a
+            # reference to this exact list object from startup;
+            # reassigning container.deployment_runtimes here would only
+            # change OUR reference, never reaching that running thread.
+            container.deployment_runtimes[:] = [
+                rt for rt in container.deployment_runtimes if rt.deployment.id != deployment.id
+            ]
+            return
+
+        if not deployment.enabled:
+            if existing is not None:
+                container.deployment_runtimes[:] = [
+                    rt for rt in container.deployment_runtimes if rt.deployment.id != deployment.id
+                ]
+            return
+
+        if existing is None:
+            container.deployment_runtimes.append(
+                build_deployment_runtime(
+                    deployment,
+                    container.live_engine,
+                    container.event_bus,
+                    container.strategy_registry,
+                    container.charge_config_repository,
+                )
+            )
+            return
+
+        # Mutate the LIVE ExecutionManager in place rather than replacing
+        # it — replacing would reset trade_state={}, orphaning exit
+        # management (SL/target/trailing) for any position currently open
+        # under the old instance.
+        existing.deployment = deployment
+        em = existing.execution_manager
+        em.symbols = list(deployment.symbols)
+        em.quantity = deployment.config.quantity
+        em.stoploss_pct = deployment.config.stoploss_pct
+        em.target_pct = deployment.config.target_pct
+        em.trailing_pct = deployment.config.trailing_pct
+        em.max_cycles_per_day = deployment.config.max_cycles_per_day
+        em.timeframe = deployment.config.timeframe
+
     @app.post("/api/deployments", status_code=201)
     def create_deployment(body: DeploymentRequest):
         symbols = _validate_deployment_request(body)
@@ -595,6 +700,7 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             enabled=body.enabled,
         )
         container.deployment_repository.save_deployment(deployment)
+        _sync_deployment_runtime(deployment)
         return _deployment_to_dict(deployment)
 
     @app.put("/api/deployments/{deployment_id}")
@@ -622,28 +728,105 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             enabled=body.enabled,
         )
         container.deployment_repository.save_deployment(deployment)
+        _sync_deployment_runtime(deployment)
         return _deployment_to_dict(deployment)
 
     @app.delete("/api/deployments/{deployment_id}")
     def delete_deployment(deployment_id: str):
+        # Stop it live first (see _sync_deployment_runtime's comment on
+        # why this is an in-place list mutation, not a rebind) — otherwise
+        # a deleted deployment keeps trading in memory until restart even
+        # though it's gone from the DB.
+        container.deployment_runtimes[:] = [
+            rt for rt in container.deployment_runtimes if rt.deployment.id != deployment_id
+        ]
         container.deployment_repository.delete_deployment(deployment_id)
         return {"deleted": deployment_id}
 
     # -----------------------------
-    # REST: watchlist
+    # REST: watchlists — named, user-organized symbol groups. Every
+    # watchlist's symbols are streamed/warmed together (see
+    # core/container.py); these are for organizing/picking, not for
+    # gating what the live engine tracks (that's get_all_symbols(),
+    # used in deployment validation below and in the screener fallback).
     # -----------------------------
-    @app.get("/api/watchlist")
-    def watchlist():
-        return {"symbols": container.watchlist_repository.get_symbols()}
+    @app.get("/api/watchlists")
+    def list_watchlists():
+        return [_watchlist_to_dict(w) for w in container.watchlist_repository.list_watchlists()]
 
-    @app.put("/api/watchlist")
-    def update_watchlist(body: WatchlistUpdateRequest):
-        cleaned = list(dict.fromkeys(s.strip().upper() for s in body.symbols if s.strip()))
+    @app.post("/api/watchlists", status_code=201)
+    def create_watchlist(body: WatchlistNameRequest):
+        try:
+            watchlist = container.watchlist_repository.create_watchlist(body.name)
+        except ValueError as e:
+            raise ValidationError(str(e))
+        return _watchlist_to_dict(watchlist)
+
+    @app.put("/api/watchlists/{watchlist_id}")
+    def rename_watchlist(watchlist_id: int, body: WatchlistNameRequest):
+        try:
+            watchlist = container.watchlist_repository.rename_watchlist(watchlist_id, body.name)
+        except ValueError as e:
+            raise ValidationError(str(e))
+        return _watchlist_to_dict(watchlist)
+
+    @app.put("/api/watchlists/{watchlist_id}/symbols")
+    def update_watchlist_symbols(watchlist_id: int, body: WatchlistSymbolsRequest):
+        cleaned = [s for s in body.symbols if s.strip()]
         if not cleaned:
             raise ValidationError("Watchlist cannot be empty.")
 
-        container.watchlist_repository.save_symbols(cleaned)
-        return {"symbols": cleaned}
+        # Whatever's live-tracked BEFORE this save — anything not in that
+        # set is genuinely new to the whole app (not just this one
+        # watchlist) and needs hot-adding to the live feed, not just a DB
+        # write, or it'd silently need a restart to ever produce ticks.
+        previously_tracked = set(container.live_engine.data.keys())
+
+        try:
+            watchlist = container.watchlist_repository.save_symbols(watchlist_id, cleaned)
+        except ValueError as e:
+            raise ValidationError(str(e))
+
+        for symbol in set(watchlist.symbols) - previously_tracked:
+            try:
+                hot_add_symbol(container.live_engine, container.zerodha_client, container.market_data_provider, symbol)
+            except Exception:
+                logger.exception("Hot-add failed for %s — it'll pick up on next restart instead.", symbol)
+
+        return _watchlist_to_dict(watchlist)
+
+    @app.delete("/api/watchlists/{watchlist_id}")
+    def delete_watchlist(watchlist_id: int):
+        try:
+            container.watchlist_repository.delete_watchlist(watchlist_id)
+        except ValueError as e:
+            raise ValidationError(str(e))
+        return {"deleted": watchlist_id}
+
+    # -----------------------------
+    # REST: NSE symbol suggestions — typeahead while adding a symbol to a
+    # watchlist. Resynced on demand from Kite's instrument dump rather
+    # than automatically (new NSE listings are rare enough this doesn't
+    # need to be automatic); needs the live Zerodha session, so this only
+    # lives on this app (not the standalone backtest server).
+    # -----------------------------
+    @app.get("/api/symbols/search")
+    def search_symbols(q: str = "", limit: int = 20):
+        return [
+            {"tradingsymbol": s.tradingsymbol, "name": s.name}
+            for s in container.symbol_master_repository.search(q, limit=limit)
+        ]
+
+    @app.post("/api/symbols/resync")
+    def resync_symbols():
+        raw = container.zerodha_client.kite.instruments("NSE")
+        suggestions = [
+            SymbolSuggestion(tradingsymbol=row["tradingsymbol"], name=row.get("name") or row["tradingsymbol"])
+            for row in raw
+            if row.get("instrument_type") == "EQ"
+        ]
+        container.symbol_master_repository.replace_all(suggestions)
+        return {"count": len(suggestions)}
 
     # -----------------------------
     # REST: brokerage/tax rate card (core/domain/charges.py) — editable so

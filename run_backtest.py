@@ -22,20 +22,20 @@ import polars as pl
 
 from dataclasses import asdict
 
-from core.domain.charges import ChargeConfig
+from core.domain.charges import ChargeConfig, options_charge_config
 from core.domain.metrics import PerformanceMetrics, compute_performance_metrics, equity_curve
 from core.domain.models import StrategyConfig
 from infrastructure.config.settings import get_settings
 from infrastructure.persistence.database import create_session_factory
 from infrastructure.persistence.sql_backtest_result_repository import SqlBacktestResultRepository
 from runners.backtesting.engine import run_backtest
-from runners.backtesting.historical_loader import load_equity_csv
+from runners.backtesting.historical_loader import load_backtest_csv, load_lot_sizes, validate_lot_multiple
 from runners.backtesting.parameter_sweep import build_config_grid, rank_by, sweep_parameters
 from runners.backtesting.report import write_backtest_report, write_sweep_report
 from runners.backtesting.result_persistence import (
-    breakdown_rows,
     required_dynamic_indicators,
     save_backtest_result,
+    save_per_symbol_results,
     symbols_identity,
 )
 from runners.backtesting.strategy_resolver import UnknownStrategyError, resolve_strategy_class
@@ -46,6 +46,15 @@ DEFAULT_REPORT_DIR = "reports/backtests"
 
 def _default_csv_path(symbol: str) -> str:
     return os.path.join(get_settings().historical_data_dir, f"{symbol}_historical.csv")
+
+
+def _is_option_csv(path: str) -> bool:
+    """Same detection signal as historical_loader.load_backtest_csv (the
+    `oi` column) -- checked separately here since charges/lot-size need to
+    know this BEFORE the data is actually loaded per-symbol."""
+    if not os.path.exists(path):
+        return False
+    return "oi" in pl.read_csv(path, n_rows=0).columns
 
 
 def _parse_floats(value: str) -> list:
@@ -138,7 +147,6 @@ def main() -> None:
 
     symbols = _resolve_symbols(args)
     label = _report_label(symbols)
-    charge_config = ChargeConfig() if args.charges else None
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     requested_date_from = dt.date.fromisoformat(args.date_from) if args.date_from else None
     requested_date_to = dt.date.fromisoformat(args.date_to) if args.date_to else None
@@ -171,6 +179,24 @@ def main() -> None:
         symbol_csv_pairs = [(s, p) for s, p in symbol_csv_pairs if (s, p) not in missing]
         if not symbol_csv_pairs:
             sys.exit(1)
+
+    # Options have their own Zerodha rate card (flat brokerage, different
+    # STT/exchange-charge basis -- see core/domain/charges.py) -- detected
+    # from the actual CSVs being used (an `oi` column), same signal
+    # load_backtest_csv uses, rather than trusting --symbol's naming.
+    is_options_run = any(_is_option_csv(p) for _, p in symbol_csv_pairs)
+    if args.charges:
+        charge_config = options_charge_config() if is_options_run else ChargeConfig()
+    else:
+        charge_config = None
+
+    if is_options_run:
+        lot_sizes = load_lot_sizes(get_settings().historical_data_dir)
+        for s, _ in symbol_csv_pairs:
+            underlying = s.split(":")[0] if ":" in s else s
+            warning = validate_lot_multiple(underlying, args.quantity, lot_sizes)
+            if warning:
+                print(f"WARNING: {warning}", file=sys.stderr)
 
     if args.sweep:
         grid = build_config_grid(
@@ -244,7 +270,7 @@ def main() -> None:
     data_min: Optional[dt.date] = None
     data_max: Optional[dt.date] = None
     for symbol, csv_path in symbol_csv_pairs:
-        df = load_equity_csv(csv_path)
+        df = load_backtest_csv(csv_path)
         df_min, df_max = df["date"].min().date(), df["date"].max().date()
         data_min = df_min if data_min is None else min(data_min, df_min)
         data_max = df_max if data_max is None else max(data_max, df_max)
@@ -283,25 +309,18 @@ def main() -> None:
     if not args.no_save:
         session_factory = create_session_factory(get_settings().database_url)
         result_repo = SqlBacktestResultRepository(session_factory)
-        saved = save_backtest_result(
-            result_repo, strategy_name=args.strategy, symbols_id=symbols_id,
+        # One row per symbol, not one combined row — same reasoning/shape
+        # as backtest_server.py's /api/backtest/run (see
+        # save_per_symbol_results's docstring) so a run through either
+        # path dedups against the same stored history.
+        saved = save_per_symbol_results(
+            result_repo, strategy_name=args.strategy,
+            symbols_used=[s for s, _ in per_symbol_counts], all_trades=all_trades,
             config=base_config, charges_enabled=args.charges,
             date_from=requested_date_from or data_min, date_to=requested_date_to or data_max,
-            result={
-                "symbols_used": [s for s, _ in per_symbol_counts],
-                "total_trades": len(all_trades),
-                "metrics": asdict(metrics),
-                "equity_curve": [asdict(p) for p in equity_curve(all_trades)],
-                # Same shape backtest_server.py's /api/backtest/run saves —
-                # the Analysis tab's StrategyTable expects these three to
-                # exist regardless of which path produced the result.
-                "by_symbol": breakdown_rows(all_trades, lambda t: t.symbol),
-                "by_market_condition": breakdown_rows(all_trades, lambda t: t.market_condition),
-                "by_side": breakdown_rows(all_trades, lambda t: t.side.value),
-                "capital": args.capital,
-            },
+            capital=args.capital,
         )
-        print(f"\nLogged to backtest_results (id={saved.id}).")
+        print(f"\nLogged {len(saved)} per-symbol result(s) to backtest_results.")
 
 
 if __name__ == "__main__":

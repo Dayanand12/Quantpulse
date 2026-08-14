@@ -71,8 +71,7 @@ def test_processes_every_pending_scenario_and_saves_results(tmp_path):
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -106,8 +105,7 @@ def test_invalid_scenarios_are_left_untouched_not_run(tmp_path):
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -129,8 +127,7 @@ def test_job_fails_cleanly_when_no_symbol_has_historical_data(tmp_path):
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("MISSING", str(tmp_path / "no_such_file.csv"))],
-        symbols_id="MISSING", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("MISSING", str(tmp_path / "no_such_file.csv"))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -152,8 +149,7 @@ def test_processes_more_scenarios_than_one_chunk(tmp_path):
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -188,8 +184,7 @@ def test_per_scenario_config_overrides_actually_take_effect(tmp_path):
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -218,8 +213,7 @@ def test_scenarios_sharing_identical_settings_are_grouped_into_one_saved_result(
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -240,8 +234,7 @@ def test_a_scenario_identical_to_an_already_stored_result_is_skipped_not_rerun(t
         scenarios=[BatchJobScenario(label="original", overrides={"threshold": 100.5})],
     ))
     run_batch_job(
-        first_job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        first_job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
     original_result_id = job_repo.get(first_job.id).scenarios[0].saved_result_id
     assert original_result_id is not None
@@ -257,8 +250,7 @@ def test_a_scenario_identical_to_an_already_stored_result_is_skipped_not_rerun(t
         ],
     ))
     run_batch_job(
-        second_job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        second_job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(second_job.id)
@@ -292,8 +284,7 @@ def test_scenarios_within_the_same_job_are_not_skipped_against_each_other(tmp_pa
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -322,8 +313,7 @@ def test_capital_override_does_not_change_dedup_identity(tmp_path):
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -356,8 +346,7 @@ def test_one_row_per_year_produces_distinct_year_scoped_results(tmp_path):
     ))
 
     run_batch_job(
-        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(job.id)
@@ -392,8 +381,7 @@ def test_reupload_with_an_additional_year_only_runs_the_new_year(tmp_path):
         ],
     ))
     run_batch_job(
-        first_job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        first_job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
     year_2023_id = job_repo.get(first_job.id).scenarios[0].saved_result_id
     assert year_2023_id is not None
@@ -413,8 +401,7 @@ def test_reupload_with_an_additional_year_only_runs_the_new_year(tmp_path):
         ],
     ))
     run_batch_job(
-        second_job, TestJsonThresholdStrategy, [("TEST", str(csv_path))],
-        symbols_id="TEST", job_repo=job_repo, result_repo=result_repo,
+        second_job, TestJsonThresholdStrategy, [("TEST", str(csv_path))], job_repo=job_repo, result_repo=result_repo,
     )
 
     saved = job_repo.get(second_job.id)
@@ -423,3 +410,84 @@ def test_reupload_with_an_additional_year_only_runs_the_new_year(tmp_path):
     assert same_year.saved_result_id == year_2023_id
     assert new_year.status == "done"
     assert new_year.saved_result_id != year_2023_id
+
+
+def test_multi_symbol_job_saves_one_result_per_symbol(tmp_path):
+    csv_a = tmp_path / "TEST_historical.csv"
+    csv_b = tmp_path / "TEST2_historical.csv"
+    _write_sample_csv(csv_a)
+    _write_sample_csv(csv_b)
+    job_repo, result_repo = _repos(tmp_path)
+
+    job = job_repo.create(BatchJob(
+        strategy_name="test_json_threshold",
+        shared_config={"capital": 100_000, "charges": True},
+        scenarios=[BatchJobScenario(label="fires", overrides={"threshold": 100.5})],
+    ))
+
+    run_batch_job(
+        job, TestJsonThresholdStrategy, [("TEST", str(csv_a)), ("TEST2", str(csv_b))],
+        job_repo=job_repo, result_repo=result_repo,
+    )
+
+    saved = job_repo.get(job.id)
+    assert saved.status == "done"
+    [scenario] = saved.scenarios
+    assert scenario.status == "done"
+
+    # One stored row PER SYMBOL, not one combined row for the scenario.
+    all_results = result_repo.list_results("test_json_threshold")
+    assert len(all_results) == 2
+    by_symbol = {r.params.symbols: r for r in all_results}
+    assert set(by_symbol.keys()) == {"TEST", "TEST2"}
+    assert by_symbol["TEST"].result["metrics"]["total_trades"] == 1
+    assert by_symbol["TEST2"].result["metrics"]["total_trades"] == 1
+    # scenario.saved_result_id is just a representative pointer to ONE of
+    # the two — the real way to browse per-symbol results is the stored
+    # rows themselves (Analysis tab filters), not this single id.
+    assert scenario.saved_result_id in {by_symbol["TEST"].id, by_symbol["TEST2"].id}
+
+
+def test_reupload_with_an_additional_symbol_only_needs_the_new_symbol_to_be_missing(tmp_path):
+    # Per-symbol dedup granularity: a scenario is only "skipped" when
+    # EVERY one of its symbols already has a matching stored row. Adding
+    # a new symbol to the watchlist means the scenario still has to run
+    # (this doesn't do partial-symbol runs), but the ALREADY-tested
+    # symbol's row is upserted back to the same id, not duplicated, and
+    # the new symbol gets its own fresh row.
+    csv_a = tmp_path / "TEST_historical.csv"
+    csv_b = tmp_path / "TEST2_historical.csv"
+    _write_sample_csv(csv_a)
+    _write_sample_csv(csv_b)
+    job_repo, result_repo = _repos(tmp_path)
+
+    first_job = job_repo.create(BatchJob(
+        strategy_name="test_json_threshold",
+        shared_config={"capital": 100_000, "charges": True},
+        scenarios=[BatchJobScenario(label="fires", overrides={"threshold": 100.5})],
+    ))
+    run_batch_job(
+        first_job, TestJsonThresholdStrategy, [("TEST", str(csv_a))],
+        job_repo=job_repo, result_repo=result_repo,
+    )
+    test_id_after_first_run = {
+        r.params.symbols: r.id for r in result_repo.list_results("test_json_threshold")
+    }["TEST"]
+
+    second_job = job_repo.create(BatchJob(
+        strategy_name="test_json_threshold",
+        shared_config={"capital": 100_000, "charges": True},
+        scenarios=[BatchJobScenario(label="fires again", overrides={"threshold": 100.5})],
+    ))
+    run_batch_job(
+        second_job, TestJsonThresholdStrategy, [("TEST", str(csv_a)), ("TEST2", str(csv_b))],
+        job_repo=job_repo, result_repo=result_repo,
+    )
+
+    [scenario] = job_repo.get(second_job.id).scenarios
+    assert scenario.status == "done"  # TEST2 is new, so this couldn't be skipped
+
+    all_results = {r.params.symbols: r for r in result_repo.list_results("test_json_threshold")}
+    assert set(all_results.keys()) == {"TEST", "TEST2"}
+    # TEST's row was upserted in place (same identity), not duplicated.
+    assert all_results["TEST"].id == test_id_after_first_run

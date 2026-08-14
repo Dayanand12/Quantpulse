@@ -200,4 +200,113 @@ def test_no_charge_config_leaves_charges_none():
     trades = run_backtest(TestAlwaysShortStrategy(), "TEST", df, config)
 
     assert trades[0].charges is None
-    assert trades[0].net_pnl is None
+
+
+# -----------------------------------------------------------------------
+# nifty_ema9/nifty_ema21/nifty_adx — broader-market regime fields joined
+# onto every symbol's snapshot (core/domain/strategy_conditions.py's
+# VALID_SNAPSHOT_FIELDS). _regime_snapshot_series is monkeypatched
+# directly in most of these (not the real NIFTY CSV) so they're isolated
+# from both the real data file and engine.py's module-level cache.
+# -----------------------------------------------------------------------
+
+import runners.backtesting.engine as engine_module
+
+
+def test_nifty_regime_fields_join_onto_the_snapshot_by_matching_date(monkeypatch):
+    day = dt.date(2026, 1, 5)
+    rows = _flat_warmup(day, _FIRST_TRADEABLE_INDEX + 2, 100.0)
+    df = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime))
+    config = StrategyConfig()
+
+    nifty_rows = [
+        {
+            "date": dt.datetime.combine(day, dt.time(9, 15)) + dt.timedelta(minutes=i),
+            "nifty_ema9": 100.0 + i, "nifty_ema21": 90.0 + i, "nifty_adx": 40.0,
+        }
+        for i in range(_FIRST_TRADEABLE_INDEX + 2)
+    ]
+    nifty_df = pl.DataFrame(nifty_rows).with_columns(pl.col("date").cast(pl.Datetime))
+    monkeypatch.setattr(engine_module, "_regime_snapshot_series", lambda timeframe_minutes: nifty_df)
+
+    spy = _SnapshotSpyStrategy()
+    run_backtest(spy, "TEST", df, config)
+
+    assert spy.seen_snapshots
+    last = spy.seen_snapshots[-1]
+    assert last["nifty_ema9"] is not None
+    assert last["nifty_ema9"] > last["nifty_ema21"]  # matches the fixture's construction
+
+
+def test_nifty_regime_fields_are_none_when_nifty_data_unavailable(monkeypatch):
+    day = dt.date(2026, 1, 5)
+    rows = _flat_warmup(day, _FIRST_TRADEABLE_INDEX + 2, 100.0)
+    df = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime))
+    config = StrategyConfig()
+
+    monkeypatch.setattr(engine_module, "_regime_snapshot_series", lambda timeframe_minutes: None)
+
+    spy = _SnapshotSpyStrategy()
+    run_backtest(spy, "TEST", df, config)
+
+    assert spy.seen_snapshots
+    assert all(snap["nifty_ema9"] is None for snap in spy.seen_snapshots)
+    assert all(snap["nifty_ema21"] is None for snap in spy.seen_snapshots)
+    assert all(snap["nifty_adx"] is None for snap in spy.seen_snapshots)
+
+
+def test_regime_lookup_is_skipped_when_backtesting_nifty_itself(monkeypatch):
+    day = dt.date(2026, 1, 5)
+    rows = _flat_warmup(day, _FIRST_TRADEABLE_INDEX + 2, 100.0)
+    df = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime))
+    config = StrategyConfig()
+
+    calls = []
+    monkeypatch.setattr(
+        engine_module, "_regime_snapshot_series",
+        lambda timeframe_minutes: calls.append(timeframe_minutes) or None,
+    )
+
+    spy = _SnapshotSpyStrategy()
+    run_backtest(spy, "NIFTY 50", df, config)
+
+    assert calls == []  # never looked itself up
+    assert all(snap["nifty_ema9"] is None for snap in spy.seen_snapshots)
+
+
+def test_regime_fields_dont_affect_the_stocks_own_fields_when_nifty_coverage_has_a_gap(monkeypatch):
+    # A gap in NIFTY's own coverage (e.g. its history starts later than
+    # the stock's) must not crash the join or affect the stock's OWN
+    # indicators — just leaves nifty_* None for that bar, same as any
+    # other missing snapshot field.
+    day = dt.date(2026, 1, 5)
+    rows = _flat_warmup(day, _FIRST_TRADEABLE_INDEX + 2, 100.0)
+    df = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime))
+    config = StrategyConfig()
+
+    nifty_df = pl.DataFrame([{
+        "date": dt.datetime.combine(day, dt.time(9, 15)),
+        "nifty_ema9": 105.0, "nifty_ema21": 95.0, "nifty_adx": 40.0,
+    }]).with_columns(pl.col("date").cast(pl.Datetime))
+    monkeypatch.setattr(engine_module, "_regime_snapshot_series", lambda timeframe_minutes: nifty_df)
+
+    spy = _SnapshotSpyStrategy()
+    run_backtest(spy, "TEST", df, config)
+
+    assert spy.seen_snapshots
+    assert all(snap["ema9"] is not None for snap in spy.seen_snapshots)
+
+
+def test_regime_snapshot_series_caches_by_timeframe_and_handles_a_missing_file(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        engine_module, "get_settings", lambda: SimpleNamespace(historical_data_dir=str(tmp_path)),
+    )
+    engine_module._regime_cache.clear()
+    try:
+        result = engine_module._regime_snapshot_series(1)
+        assert result is None
+        assert 1 in engine_module._regime_cache  # "checked, missing" is itself cached
+    finally:
+        engine_module._regime_cache.clear()

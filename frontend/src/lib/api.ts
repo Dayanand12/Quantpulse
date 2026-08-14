@@ -8,6 +8,7 @@ import type {
   ScreenerRow,
   StrategyInfo,
   StrategySource,
+  SymbolSuggestion,
   Trade,
   Watchlist,
 } from "./types"
@@ -41,8 +42,18 @@ export const api = {
   downloadReport: (symbol: string) =>
     getJSON<{ file: string }>(`/api/download-report?symbol=${encodeURIComponent(symbol)}`),
 
-  watchlist: () => getJSON<Watchlist>("/api/watchlist"),
-  saveWatchlist: (symbols: string[]) => sendJSON<Watchlist>("/api/watchlist", "PUT", { symbols }),
+  watchlists: () => getJSON<Watchlist[]>("/api/watchlists"),
+  createWatchlist: (name: string) => sendJSON<Watchlist>("/api/watchlists", "POST", { name }),
+  renameWatchlist: (id: number, name: string) =>
+    sendJSON<Watchlist>(`/api/watchlists/${id}`, "PUT", { name }),
+  saveWatchlistSymbols: (id: number, symbols: string[]) =>
+    sendJSON<Watchlist>(`/api/watchlists/${id}/symbols`, "PUT", { symbols }),
+  deleteWatchlist: (id: number) =>
+    sendJSON<{ deleted: number }>(`/api/watchlists/${id}`, "DELETE"),
+
+  searchSymbols: (query: string) =>
+    getJSON<SymbolSuggestion[]>(`/api/symbols/search?q=${encodeURIComponent(query)}`),
+  resyncSymbols: () => sendJSON<{ count: number }>("/api/symbols/resync", "POST"),
 
   strategies: () => getJSON<StrategyInfo[]>("/api/strategies"),
 

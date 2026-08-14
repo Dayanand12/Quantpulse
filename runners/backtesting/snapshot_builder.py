@@ -57,17 +57,45 @@ def _opening_range(base_df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def _resample_oi(base_df: pl.DataFrame, minutes: int) -> pl.DataFrame:
+    """Same bucket-start formula as LiveEngine._resample (duplicated
+    rather than extending that method) so this stays fully isolated from
+    the live trading path -- _resample is on the hot path for every live
+    tick and has no `oi` column to aggregate for equity, so it must never
+    need to know options exist. OI is a level/state snapshot, not a flow
+    like volume -- `.last()` per bucket (the most recent OI observed by
+    the time this bar closes), not summed."""
+    if minutes == 1:
+        return base_df.select("date", "oi")
+    minutes_since_midnight = pl.col("date").dt.hour().cast(pl.Int64) * 60 + pl.col("date").dt.minute().cast(pl.Int64)
+    minutes_since_open = minutes_since_midnight - LiveEngine._SESSION_OPEN_MINUTES
+    bucket_index = minutes_since_open // minutes
+    bucket_offset = (bucket_index * minutes + LiveEngine._SESSION_OPEN_MINUTES).cast(pl.Int64)
+    bucket_start = pl.col("date").dt.truncate("1d") + pl.duration(minutes=bucket_offset)
+    return (
+        base_df.with_columns(bucket_start.alias("bucket"))
+        .group_by("bucket", maintain_order=True)
+        .agg(pl.col("oi").last())
+        .rename({"bucket": "date"})
+        .sort("date")
+    )
+
+
 def build_snapshot_series(
     base_df: pl.DataFrame,
     timeframe_minutes: int,
     extra_indicators: Optional[List[IndicatorSpec]] = None,
 ) -> pl.DataFrame:
-    """base_df: 1-minute OHLCV (see historical_loader.load_equity_csv).
+    """base_df: 1-minute OHLCV (see historical_loader.load_equity_csv),
+    optionally with an `oi` column (historical_loader.load_option_csv).
     Returns one row per bar at `timeframe_minutes` resolution, columns
     matching LiveEngine.get_snapshot()'s per-symbol dict exactly: date,
     ltp, ema5, ema9, ema21, rsi, adx, atr_pct, vwap, volume_ratio, orb_low,
-    distance_to_or_low. Rows before _MIN_BARS warm-up are dropped, same as
-    live (a strategy never sees a snapshot for those).
+    distance_to_or_low, oi. Rows before _MIN_BARS warm-up are dropped,
+    same as live (a strategy never sees a snapshot for those). `oi` is
+    always present in the output shape (None when the source has none)
+    so downstream code (engine.py's Trade.entry_oi capture) never needs
+    to branch on whether this particular base_df happened to have it.
 
     extra_indicators: any additional dynamically-requested indicators
     (core/domain/indicator_registry.py — e.g. a strategy's
@@ -77,6 +105,7 @@ def build_snapshot_series(
     changes the fixed set's own values — purely additive."""
     extra_indicators = extra_indicators or []
     extra_keys = [spec.key for spec in extra_indicators]
+    has_oi = "oi" in base_df.columns
 
     or_by_day = _opening_range(base_df)
 
@@ -85,8 +114,13 @@ def build_snapshot_series(
         return tf_df.clear().with_columns(
             pl.lit(None, dtype=pl.Float64).alias(c)
             for c in ("ltp", "ema5", "ema9", "ema21", "rsi", "adx", "atr_pct", "vwap",
-                      "volume_ratio", "orb_low", "orb_high", "distance_to_or_low", *extra_keys)
+                      "volume_ratio", "orb_low", "orb_high", "distance_to_or_low", "oi", *extra_keys)
         )
+
+    if has_oi:
+        tf_df = tf_df.join(_resample_oi(base_df, timeframe_minutes), on="date", how="left")
+    else:
+        tf_df = tf_df.with_columns(pl.lit(None, dtype=pl.Float64).alias("oi"))
 
     ema5 = IndicatorCalculator.ema(tf_df, period=5)
     ema9 = IndicatorCalculator.ema(tf_df, period=9)
@@ -169,5 +203,5 @@ def build_snapshot_series(
     # into IStrategy.screen()'s snapshot dict.
     return out.select(
         "date", "ltp", "high", "low", "ema5", "ema9", "ema21", "rsi", "adx", "atr_pct",
-        "vwap", "volume_ratio", "orb_low", "orb_high", "distance_to_or_low", *extra_keys,
+        "vwap", "volume_ratio", "orb_low", "orb_high", "distance_to_or_low", "oi", *extra_keys,
     ).tail(out.height - _MIN_BARS + 1)

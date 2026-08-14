@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react"
 import { backtestApi } from "../../lib/backtestApi"
-import type { BacktestRunConfig, StrategyInfo } from "../../lib/backtestTypes"
+import type { BacktestRunConfig, NamedWatchlist, StrategyInfo } from "../../lib/backtestTypes"
 import type { CandleTimeframe } from "../../lib/types"
 import { StrategyParamsEditor } from "./StrategyParamsEditor"
+
+type SymbolMode = "whole" | "watchlist" | "specific"
 
 const TIMEFRAMES: CandleTimeframe[] = ["minute", "3minute", "5minute", "10minute", "15minute", "30minute"]
 
@@ -33,8 +35,15 @@ interface BacktestFormProps {
 export function BacktestForm({ config, onChange, onRun, running }: BacktestFormProps) {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [watchlist, setWatchlist] = useState<string[]>([])
-  const [useWholeWatchlist, setUseWholeWatchlist] = useState(true)
+  const [namedWatchlists, setNamedWatchlists] = useState<NamedWatchlist[]>([])
+  const [symbolMode, setSymbolMode] = useState<SymbolMode>("whole")
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState<number | null>(null)
   const [symbolsText, setSymbolsText] = useState("")
+  // Guards the sync effect below from firing with default state before
+  // loadStrategiesAndWatchlist's restore-from-config logic has run —
+  // without this, mounting would briefly overwrite config.symbols with
+  // "whole watchlist" before correcting itself a tick later.
+  const [symbolModeRestored, setSymbolModeRestored] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
 
   const [showClone, setShowClone] = useState(false)
@@ -47,9 +56,43 @@ export function BacktestForm({ config, onChange, onRun, running }: BacktestFormP
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
   function loadStrategiesAndWatchlist() {
-    return Promise.all([backtestApi.strategies(), backtestApi.watchlist()]).then(([strategyList, wl]) => {
+    return Promise.all([
+      backtestApi.strategies(),
+      backtestApi.watchlist(),
+      backtestApi.watchlists(),
+    ]).then(([strategyList, wl, namedList]) => {
       setStrategies(strategyList)
       setWatchlist(wl.symbols)
+      setNamedWatchlists(namedList)
+
+      // Restore whichever symbol mode config.symbols already reflects
+      // (e.g. coming back to this page after navigating away — config
+      // lives in useBacktestPageStore precisely so it survives that, see
+      // that store's comment on a past incident of exactly this class of
+      // bug for config.strategy). Without this, remounting would always
+      // reset the sync effect below to "whole watchlist" and silently
+      // clobber whatever watchlist/symbols were actually selected.
+      const currentSymbols = config.symbols
+      if (currentSymbols && currentSymbols.length > 0) {
+        const matching = namedList.find(
+          (w) =>
+            w.symbols.length === currentSymbols.length &&
+            w.symbols.every((s) => currentSymbols.includes(s)),
+        )
+        if (matching) {
+          setSymbolMode("watchlist")
+          setSelectedWatchlistId(matching.id)
+        } else {
+          setSymbolMode("specific")
+          setSymbolsText(currentSymbols.join(", "))
+        }
+      } else {
+        setSelectedWatchlistId((current) =>
+          current !== null && namedList.some((w) => w.id === current) ? current : (namedList[0]?.id ?? null)
+        )
+      }
+      setSymbolModeRestored(true)
+
       return strategyList
     })
   }
@@ -103,22 +146,35 @@ export function BacktestForm({ config, onChange, onRun, running }: BacktestFormP
     onChange({ ...config, [key]: value })
   }
 
+  // config.symbols is shared with BatchRunner and BulkUpload (see
+  // Backtest.tsx — all three read the same store slice), so it has to
+  // reflect the current symbol-mode selection continuously, not just at
+  // the moment "Run Backtest" is clicked — otherwise switching to a
+  // different watchlist and going straight to Bulk Upload without first
+  // running a single backtest would silently upload against the OLD
+  // symbol set (this was a real bug: a batch job re-run against a newly
+  // picked watchlist came back "already tested" because config.symbols
+  // hadn't actually changed).
+  useEffect(() => {
+    if (!symbolModeRestored) return // don't clobber config.symbols before restore runs
+
+    let symbols: string[] | undefined
+    if (symbolMode === "whole") {
+      symbols = undefined
+    } else if (symbolMode === "watchlist") {
+      symbols = namedWatchlists.find((w) => w.id === selectedWatchlistId)?.symbols ?? []
+    } else {
+      symbols = symbolsText
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean)
+    }
+    onChange({ ...config, symbols })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbolModeRestored, symbolMode, selectedWatchlistId, symbolsText, namedWatchlists])
+
   function handleRun() {
-    const symbols = useWholeWatchlist
-      ? undefined
-      : symbolsText
-          .split(",")
-          .map((s) => s.trim().toUpperCase())
-          .filter(Boolean)
-    const resolved = { ...config, symbols }
-    // Pass the resolved config directly to onRun instead of relying on
-    // onChange's setState + a following onRun() reading it back — state
-    // updates are async/batched, so a same-tick onChange-then-onRun would
-    // fire the request with the PREVIOUS config (this was a real bug:
-    // "Specific symbols" silently ran the whole watchlist instead,
-    // because the just-typed symbols hadn't landed in state yet).
-    onChange(resolved)
-    onRun(resolved)
+    onRun(config)
   }
 
   if (loadError) {
@@ -386,23 +442,42 @@ export function BacktestForm({ config, onChange, onRun, running }: BacktestFormP
         <span className={labelClass}>Symbols</span>
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-1.5 text-sm">
-            <input
-              type="radio"
-              checked={useWholeWatchlist}
-              onChange={() => setUseWholeWatchlist(true)}
-            />
+            <input type="radio" checked={symbolMode === "whole"} onChange={() => setSymbolMode("whole")} />
             Whole watchlist ({watchlist.length} symbols)
           </label>
           <label className="flex items-center gap-1.5 text-sm">
             <input
               type="radio"
-              checked={!useWholeWatchlist}
-              onChange={() => setUseWholeWatchlist(false)}
+              checked={symbolMode === "watchlist"}
+              onChange={() => setSymbolMode("watchlist")}
+              disabled={namedWatchlists.length === 0}
+            />
+            A specific watchlist
+          </label>
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="radio"
+              checked={symbolMode === "specific"}
+              onChange={() => setSymbolMode("specific")}
             />
             Specific symbols
           </label>
         </div>
-        {!useWholeWatchlist && (
+        {symbolMode === "watchlist" && (
+          <select
+            className={`${fieldClass} mt-2`}
+            style={{ width: "auto" }}
+            value={selectedWatchlistId ?? ""}
+            onChange={(e) => setSelectedWatchlistId(Number(e.target.value))}
+          >
+            {namedWatchlists.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name} ({w.symbols.length} symbols)
+              </option>
+            ))}
+          </select>
+        )}
+        {symbolMode === "specific" && (
           <input
             type="text"
             list="watchlist-symbols"

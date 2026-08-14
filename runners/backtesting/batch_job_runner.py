@@ -40,7 +40,6 @@ rows instead of recomputing everything that was already tested.
 """
 
 import datetime as dt
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -50,11 +49,10 @@ from core.application.interfaces.strategy import IStrategy
 from core.domain.backtest_result import BacktestRunParams
 from core.domain.batch_job import BatchJob, BatchJobScenario
 from core.domain.charges import ChargeConfig
-from core.domain.metrics import compute_performance_metrics, equity_curve
 from core.domain.models import StrategyConfig
 from runners.backtesting.batch_runner import PanelSpec, merge_condition_overrides, run_batch_backtests
-from runners.backtesting.historical_loader import load_equity_csv
-from runners.backtesting.result_persistence import breakdown_rows, save_backtest_result
+from runners.backtesting.historical_loader import load_backtest_csv
+from runners.backtesting.result_persistence import save_per_symbol_results
 
 BATCH_JOB_CHUNK_SIZE = 6
 
@@ -110,20 +108,30 @@ def _resolve_scenario_dates(
 def _find_already_tested(
     result_repo: IBacktestResultRepository,
     strategy_name: str,
-    symbols_id: str,
+    symbols: List[str],
     data_min_date: Optional[dt.date],
     data_max_date: Optional[dt.date],
     pending: List[BatchJobScenario],
     shared_config: Dict[str, Any],
 ) -> List[Tuple[BatchJobScenario, Dict[str, Any]]]:
-    """Returns only the scenarios that still need to run — any scenario
-    whose resolved identity (including its OWN resolved date range) exactly
-    matches an already-stored result's BacktestRunParams (core/domain/
-    backtest_result.py, the same identity save_backtest_result() dedups
-    on) is marked "skipped" IN PLACE (saved_result_id pointed at the
-    match) and excluded from the return value; the caller is responsible
-    for persisting those status changes. One list_results() call up front
-    (a strategy's whole tuning history) rather than a query per scenario."""
+    """Returns only the scenarios that still need to run. Results are
+    stored per-symbol (see save_per_symbol_results), so a scenario counts
+    as "already tested" only when EVERY one of its symbols already has a
+    matching stored row for its OWN resolved identity — not one combined
+    identity for the whole symbol set. This is what makes dedup correctly
+    granular: adding one new symbol to a watchlist and re-uploading the
+    same scenarios only computes that new symbol, since every other
+    symbol already matches. A scenario missing even one symbol still
+    fully re-runs (this doesn't attempt partial-symbol runs) — its save
+    step upserts every symbol's row regardless, so already-correct rows
+    for the OTHER symbols are just harmlessly overwritten with identical
+    numbers, not duplicated.
+
+    Marked "skipped" IN PLACE (saved_result_id pointed at one matching
+    row, for reference) and excluded from the return value; the caller is
+    responsible for persisting those status changes. One list_results()
+    call up front (a strategy's whole tuning history) rather than a query
+    per scenario."""
     existing_by_identity: Dict[BacktestRunParams, int] = {
         r.params: r.id for r in result_repo.list_results(strategy_name)
     }
@@ -140,26 +148,34 @@ def _find_already_tested(
         _, _, effective_date_from, effective_date_to = _resolve_scenario_dates(
             settings, data_min_date, data_max_date
         )
-        candidate = BacktestRunParams(
-            strategy_name=strategy_name,
-            symbols=symbols_id,
-            timeframe=settings["timeframe"],
-            date_from=effective_date_from,
-            date_to=effective_date_to,
-            quantity=settings["quantity"],
-            stoploss_pct=settings["stoploss_pct"],
-            target_pct=settings["target_pct"],
-            trailing_pct=settings["trailing_pct"],
-            max_cycles_per_day=settings["max_cycles_per_day"],
-            start_time=settings["start_time"],
-            end_time=settings["end_time"],
-            charges_enabled=bool(settings["charges"]),
-            strategy_params_json=merged_params_json,
-        )
-        existing_id = existing_by_identity.get(candidate)
-        if existing_id is not None:
+
+        matched_ids: List[int] = []
+        for symbol in symbols:
+            candidate = BacktestRunParams(
+                strategy_name=strategy_name,
+                symbols=symbol,
+                timeframe=settings["timeframe"],
+                date_from=effective_date_from,
+                date_to=effective_date_to,
+                quantity=settings["quantity"],
+                stoploss_pct=settings["stoploss_pct"],
+                target_pct=settings["target_pct"],
+                trailing_pct=settings["trailing_pct"],
+                max_cycles_per_day=settings["max_cycles_per_day"],
+                start_time=settings["start_time"],
+                end_time=settings["end_time"],
+                charges_enabled=bool(settings["charges"]),
+                strategy_params_json=merged_params_json,
+            )
+            existing_id = existing_by_identity.get(candidate)
+            if existing_id is None:
+                matched_ids = []
+                break
+            matched_ids.append(existing_id)
+
+        if matched_ids:
             scenario.status = "skipped"
-            scenario.saved_result_id = existing_id
+            scenario.saved_result_id = matched_ids[0]
         else:
             to_run.append((scenario, settings))
 
@@ -183,7 +199,6 @@ def run_batch_job(
     job: BatchJob,
     strategy_cls: Type[IStrategy],
     symbols: List[Tuple[str, str]],
-    symbols_id: str,
     job_repo: IBatchJobRepository,
     result_repo: IBacktestResultRepository,
 ) -> None:
@@ -202,7 +217,7 @@ def run_batch_job(
             if not Path(csv_path).exists():
                 continue
             valid_symbols.append((symbol, csv_path))
-            df = load_equity_csv(csv_path)
+            df = load_backtest_csv(csv_path)
             df_min = df["date"].min().date()
             df_max = df["date"].max().date()
             data_min_date = df_min if data_min_date is None else min(data_min_date, df_min)
@@ -220,7 +235,7 @@ def run_batch_job(
         # Skip anything that already has an identical stored result before
         # touching any of the actually-expensive work below.
         to_run = _find_already_tested(
-            result_repo, job.strategy_name, symbols_id,
+            result_repo, job.strategy_name, [s for s, _ in valid_symbols],
             data_min_date, data_max_date, pending, job.shared_config,
         )
         job_repo.save(job)
@@ -265,31 +280,26 @@ def run_batch_job(
                 for (scenario, settings), panel in zip(chunk, panel_results):
                     try:
                         capital = settings["capital"]
-                        metrics = compute_performance_metrics(panel.trades, capital)
-                        result = {
-                            "total_trades": len(panel.trades),
-                            "metrics": asdict(metrics),
-                            "equity_curve": [asdict(p) for p in equity_curve(panel.trades)],
-                            "by_symbol": breakdown_rows(panel.trades, lambda t: t.symbol),
-                            "by_market_condition": breakdown_rows(panel.trades, lambda t: t.market_condition),
-                            "by_side": breakdown_rows(panel.trades, lambda t: t.side.value),
-                            "symbols_used": symbols_used,
-                            "symbols_missing_data": symbols_missing_data,
-                            "capital": capital,
-                        }
-                        saved = save_backtest_result(
+                        # One row per symbol, not one combined row — see
+                        # save_per_symbol_results's docstring.
+                        saved = save_per_symbol_results(
                             result_repo,
                             strategy_name=job.strategy_name,
-                            symbols_id=symbols_id,
+                            symbols_used=symbols_used,
+                            all_trades=panel.trades,
                             config=config,
                             charges_enabled=charges_enabled,
                             date_from=effective_date_from,
                             date_to=effective_date_to,
-                            result=result,
+                            capital=capital,
                             strategy_params_json=panel.strategy_params_json,
                         )
                         scenario.status = "done"
-                        scenario.saved_result_id = saved.id
+                        # Representative pointer only (one of possibly many
+                        # symbols saved this pass) — the Analysis tab's
+                        # filters are the real way to browse per-symbol
+                        # results going forward, not this single id.
+                        scenario.saved_result_id = next(iter(saved.values())).id
                     except Exception as e:
                         scenario.status, scenario.error = "error", str(e)
 

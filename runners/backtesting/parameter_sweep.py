@@ -30,7 +30,7 @@ from core.domain.indicator_registry import IndicatorSpec
 from core.domain.metrics import PerformanceMetrics, compute_performance_metrics
 from core.domain.models import StrategyConfig, Trade
 from runners.backtesting.engine import run_backtest
-from runners.backtesting.historical_loader import load_equity_csv
+from runners.backtesting.historical_loader import load_backtest_csv
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ def build_config_grid(base: StrategyConfig, **param_ranges: Sequence) -> List[St
 
 def _run_one(args: tuple) -> Tuple[int, List[Trade]]:
     strategy_cls, symbol, csv_path, config_index, config, charge_config, date_from, date_to, extra_indicators = args
-    df = load_equity_csv(csv_path)
+    df = load_backtest_csv(csv_path)
     strategy = strategy_cls()
     trades = run_backtest(
         strategy, symbol, df, config, charge_config=charge_config, date_from=date_from, date_to=date_to,

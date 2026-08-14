@@ -9,7 +9,9 @@ import { Screener } from "./pages/Screener"
 import { MarketAnalysis } from "./pages/MarketAnalysis"
 import { Strategies } from "./pages/Strategies"
 import { Backtest } from "./pages/Backtest"
+import { OptionsBacktest } from "./pages/OptionsBacktest"
 import { Analysis } from "./pages/Analysis"
+import { OptionsAnalysis } from "./pages/OptionsAnalysis"
 import { Settings } from "./pages/Settings"
 
 // CodeMirror pulls in a meaningful bundle (~470kB) that only the Strategy
@@ -32,7 +34,9 @@ export default function App() {
           <Route path="market-analysis" element={<MarketAnalysis />} />
           <Route path="strategies" element={<Strategies />} />
           <Route path="backtest" element={<Backtest />} />
+          <Route path="options-backtest" element={<OptionsBacktest />} />
           <Route path="analysis" element={<Analysis />} />
+          <Route path="options-analysis" element={<OptionsAnalysis />} />
           <Route
             path="strategy-builder"
             element={

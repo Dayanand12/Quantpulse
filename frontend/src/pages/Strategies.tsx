@@ -64,13 +64,16 @@ export function Strategies() {
   const [editError, setEditError] = useState<string | null>(null)
 
   async function refresh() {
-    const [strategiesRes, watchlistRes, deploymentsRes] = await Promise.all([
+    const [strategiesRes, watchlistsRes, deploymentsRes] = await Promise.all([
       api.strategies(),
-      api.watchlist(),
+      api.watchlists(),
       api.deployments(),
     ])
     setStrategies(strategiesRes)
-    setWatchlist(watchlistRes.symbols)
+    // A deployment can be built from any watchlist's symbols — see
+    // server/main.py::_validate_deployment_request, which validates
+    // against the union of every watchlist, not one specific list.
+    setWatchlist([...new Set(watchlistsRes.flatMap((w) => w.symbols))])
     setDeployments(deploymentsRes)
     setForm((f) => (f.strategy_name ? f : { ...f, strategy_name: strategiesRes[0]?.name ?? "" }))
   }

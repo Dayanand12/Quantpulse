@@ -9,7 +9,7 @@ transported over HTTP.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from core.domain.enums import OrderSide, OrderStatus, TradingMode
@@ -116,6 +116,12 @@ class Trade:
     entry_atr_pct: Optional[float] = None
     entry_vwap: Optional[float] = None
     entry_volume_ratio: Optional[float] = None
+    # Open interest at entry, for a STOCK option contract only — the raw
+    # value straight from Data_ingestion/options_ingest_stock.py's `oi`
+    # column (see snapshot_builder.py). None for equity, for index options
+    # (that source has no OI at all — see options_ingest_index.py's
+    # docstring), and for trades logged before this field existed.
+    entry_oi: Optional[float] = None
     # Human-readable summary of the above (see core/domain/market_condition.py),
     # e.g. "Trending / High Volume / Above VWAP" — denormalized here so
     # reports don't need to recompute it from the raw values.
@@ -189,6 +195,58 @@ class StrategyConfig:
     start_time: str = "09:20"
     end_time: str = "11:30"
     timeframe: str = "minute"
+
+
+@dataclass(frozen=True)
+class OptionContract:
+    """Identifies one option contract: underlying + strike + expiry + side.
+
+    `.symbol` is the canonical string identity — passed as the backtest
+    engine's `symbol` argument and stored verbatim in
+    BacktestRunParams.symbols (see core/domain/backtest_result.py), so an
+    option backtest dedupes on the exact same (strategy, symbols,
+    risk-settings) identity an equity backtest already does. Deliberately
+    NOT a schema change: BacktestRunParams.symbols is already "whatever
+    string identifies what was tested" — colon-delimited so it never
+    collides with tickers that contain '_' or '-' (BAJAJ-AUTO, M&M) or
+    with the comma multi-symbol separator result_persistence.py already
+    uses. `.parse()` round-trips it, for whenever a UI needs to render
+    strike/expiry/side back out of a stored result.
+    """
+
+    underlying: str
+    strike: float
+    expiry: date
+    side: str  # "CE" or "PE"
+
+    def __post_init__(self) -> None:
+        if self.side not in ("CE", "PE"):
+            raise ValueError(f"side must be 'CE' or 'PE', got {self.side!r}")
+
+    @property
+    def symbol(self) -> str:
+        return f"{self.underlying.upper()}:{self.strike:g}{self.side}:{self.expiry.isoformat()}"
+
+    @classmethod
+    def parse(cls, symbol: str) -> "OptionContract":
+        underlying, strike_side, expiry_str = symbol.split(":")
+        side = strike_side[-2:]
+        strike = float(strike_side[:-2])
+        return cls(underlying=underlying, strike=strike, expiry=date.fromisoformat(expiry_str), side=side)
+
+
+@dataclass(frozen=True)
+class Watchlist:
+    """A named, user-organized group of symbols (e.g. "Nifty50", "Bank
+    stocks"). Every watchlist's symbols are streamed/warmed together — see
+    core/container.py::build_container — so this is purely an organizing
+    concept for how a human browses/picks symbols, not a routing concept
+    for which symbols the live engine tracks.
+    """
+
+    id: int
+    name: str
+    symbols: tuple[str, ...]
 
 
 @dataclass(frozen=True)

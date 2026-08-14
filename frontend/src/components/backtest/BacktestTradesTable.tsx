@@ -6,7 +6,18 @@ import { fmtNumber } from "../../lib/format"
 
 const PAGE_SIZE = 50
 
-export function BacktestTradesTable({ trades, truncated }: { trades: BacktestTrade[]; truncated: boolean }) {
+export function BacktestTradesTable({
+  trades,
+  truncated,
+  showOi = false,
+}: {
+  trades: BacktestTrade[]
+  truncated: boolean
+  // Adds an "OI at Entry" column — only meaningful for stock-option
+  // trades (see core/domain/models.py::Trade.entry_oi), so equity's
+  // Backtest page omits it rather than showing an all-"—" column.
+  showOi?: boolean
+}) {
   const [page, setPage] = useState(0)
   const pageCount = Math.max(1, Math.ceil(trades.length / PAGE_SIZE))
   const pageTrades = trades.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
@@ -28,7 +39,19 @@ export function BacktestTradesTable({ trades, truncated }: { trades: BacktestTra
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0 z-10 bg-[var(--surface-2)]">
             <tr>
-              {["Closed At", "Symbol", "Side", "Entry", "Exit", "Qty", "Gross P&L", "Charges", "Net P&L", "Market Condition"].map(
+              {[
+                "Closed At",
+                "Symbol",
+                "Side",
+                "Entry",
+                "Exit",
+                "Qty",
+                "Gross P&L",
+                "Charges",
+                "Net P&L",
+                "Market Condition",
+                ...(showOi ? ["OI at Entry"] : []),
+              ].map(
                 (h) => (
                   <th
                     key={h}
@@ -72,6 +95,11 @@ export function BacktestTradesTable({ trades, truncated }: { trades: BacktestTra
                 <td className="whitespace-nowrap border-t border-[var(--glass-border)] px-3 py-2 text-xs text-[var(--ink-muted)]">
                   {t.market_condition ?? "—"}
                 </td>
+                {showOi && (
+                  <td className="tabular-nums whitespace-nowrap border-t border-[var(--glass-border)] px-3 py-2 text-[var(--ink-muted)]">
+                    {t.entry_oi != null ? fmtNumber(t.entry_oi) : "—"}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

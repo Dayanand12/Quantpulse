@@ -39,7 +39,7 @@ _LOOKBACK_DAYS = 10
 _MAX_CONCURRENT_FETCHES = 3
 
 
-def _fetch_and_warm_start(live_engine, zerodha_client, symbol, exchange, from_date, now) -> None:
+def fetch_and_warm_start(live_engine, zerodha_client, symbol, exchange, from_date, now) -> None:
     try:
         candles = zerodha_client.fetch_historical_data(
             symbol=symbol,
@@ -63,7 +63,7 @@ def warm_start_indicators(live_engine, zerodha_client, symbols, exchange) -> Non
 
     with ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_FETCHES) as pool:
         futures = [
-            pool.submit(_fetch_and_warm_start, live_engine, zerodha_client, symbol, exchange, from_date, now)
+            pool.submit(fetch_and_warm_start, live_engine, zerodha_client, symbol, exchange, from_date, now)
             for symbol in symbols
         ]
         for future in as_completed(futures):

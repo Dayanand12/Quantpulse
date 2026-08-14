@@ -84,16 +84,20 @@ def test_run_batch_executes_every_panel_and_saves_distinct_rows(batch_app):
         assert fires["label"] == "fires"
         assert fires["total_trades"] == 2  # one per symbol
         assert fires["metrics"]["total_trades"] == 2
-        assert "saved_result_id" in fires
+        # One row PER SYMBOL, not one combined row for the panel.
+        assert set(fires["saved_result_ids"].keys()) == {"TEST", "TEST2"}
 
         assert never_fires["label"] == "never fires"
         assert never_fires["total_trades"] == 0
+        assert set(never_fires["saved_result_ids"].keys()) == {"TEST", "TEST2"}
 
-        # Distinct overrides -> distinct stored rows for the same strategy.
+        # 2 panels x 2 symbols = 4 distinct stored rows.
         results = client.get("/api/backtest/results", params={"strategy": "test_json_threshold"}).json()
-        assert len(results) == 2
-        saved_ids = {p["saved_result_id"] for p in body["panels"]}
-        assert saved_ids == {r["id"] for r in results}
+        assert len(results) == 4
+        all_saved_ids = {i for panel in body["panels"] for i in panel["saved_result_ids"].values()}
+        assert all_saved_ids == {r["id"] for r in results}
+        # Each stored row is keyed to exactly one symbol, not a joined list.
+        assert {r["symbols"] for r in results} == {"TEST", "TEST2"}
 
 
 def test_run_batch_rerunning_same_overrides_updates_the_same_row(batch_app):
@@ -103,9 +107,9 @@ def test_run_batch_rerunning_same_overrides_updates_the_same_row(batch_app):
         first = client.post("/api/backtest/run-batch", json=payload).json()
         second = client.post("/api/backtest/run-batch", json=payload).json()
 
-        assert first["panels"][0]["saved_result_id"] == second["panels"][0]["saved_result_id"]
+        assert first["panels"][0]["saved_result_ids"] == second["panels"][0]["saved_result_ids"]
         results = client.get("/api/backtest/results", params={"strategy": "test_json_threshold"}).json()
-        assert len(results) == 1
+        assert len(results) == 2  # one per symbol (TEST, TEST2), upserted in place not duplicated
 
 
 def test_run_batch_rejects_unknown_override_parameter(batch_app):
@@ -148,7 +152,7 @@ def test_run_batch_with_save_false_does_not_persist(batch_app):
         })
 
         assert res.status_code == 200
-        assert "saved_result_id" not in res.json()["panels"][0]
+        assert "saved_result_ids" not in res.json()["panels"][0]
 
         results = client.get("/api/backtest/results", params={"strategy": "test_json_threshold"}).json()
         assert results == []

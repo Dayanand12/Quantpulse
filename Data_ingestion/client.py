@@ -34,6 +34,19 @@ class ZerodhaClient:
         # Initialize market_data dict here
         self.market_data = {}
 
+        # token -> symbol for whatever's currently subscribed on self.kws.
+        # Set for real inside start_live_data (needs `exchange`, only known
+        # at that call); add_symbol() mutates this SAME dict afterward so
+        # on_ticks (a closure over self.tokens, not a local copy) sees new
+        # symbols without needing to reconnect.
+        self.tokens = {}
+
+        # When the last on_ticks callback actually fired — the reliable
+        # "is the feed alive" signal. Prices can legitimately hold still
+        # for a moment; the callback not firing at all means the websocket
+        # is dead even though market_data still holds its last values.
+        self.last_tick_at = None
+
         # Instrument dumps are the same all day and expensive to fetch
         # (thousands of rows) — cache per exchange (plus one entry for the
         # no-exchange/global lookup) instead of hitting kite.instruments()
@@ -179,14 +192,14 @@ class ZerodhaClient:
         # A single delisted/renamed symbol (e.g. after a corporate action
         # like a demerger) must not take down the whole websocket feed —
         # skip it and keep streaming everything that did resolve.
-        tokens = {}
+        self.tokens = {}
         for sym in symbols:
             try:
-                tokens[self.get_instrument_token(sym, exchange)] = sym
+                self.tokens[self.get_instrument_token(sym, exchange)] = sym
             except ValueError as exc:
                 logging.warning("%s — skipping, not subscribed", exc)
 
-        if not tokens:
+        if not self.tokens:
             raise ValueError("❌ No symbols resolved to a valid instrument token")
 
         # dict that stores the latest tick for each symbol
@@ -194,9 +207,10 @@ class ZerodhaClient:
 
         def on_ticks(ws, ticks):
             #print("Ticks received:", ticks)
+            self.last_tick_at = time.time()
             for tick in ticks:
                 token = tick["instrument_token"]
-                symbol = tokens.get(token, str(token))  # map token back to symbol
+                symbol = self.tokens.get(token, str(token))  # map token back to symbol
                 ltp = tick['last_price']
                 ohlc = tick.get('ohlc', {})
                 open_price = ohlc.get('open')
@@ -221,9 +235,9 @@ class ZerodhaClient:
 
         def on_connect(ws, response):
             logging.info("Connected. Subscribing...")
-            print("Subscribed tokens:", tokens)
-            ws.subscribe(list(tokens.keys()))
-            ws.set_mode(ws.MODE_FULL, list(tokens.keys()))
+            print("Subscribed tokens:", self.tokens)
+            ws.subscribe(list(self.tokens.keys()))
+            ws.set_mode(ws.MODE_FULL, list(self.tokens.keys()))
 
         def on_close(ws, code, reason):
             logging.warning(f"Connection closed: {reason}")
@@ -232,7 +246,24 @@ class ZerodhaClient:
             logging.error(f"WebSocket Error: {reason}")
 
         def on_noreconnect(ws):
-            logging.error("Reconnection failed after multiple attempts!")
+            # KiteTicker's own internal reconnect loop (its default
+            # reconnect=True) already retried with backoff before giving up
+            # and calling this — if we just log here, the feed is dead for
+            # the rest of the day with nothing to notice or recover (this is
+            # what caused the 2026-08-11 frozen-feed incident: no traceback,
+            # no crash, just silence). Kick off a fresh connect() to restart
+            # that whole retry cycle instead of accepting defeat.
+            logging.error("Reconnection failed after multiple attempts! Forcing a fresh connect() in 5s.")
+
+            def _restart():
+                time.sleep(5)
+                try:
+                    ws.connect(threaded=True, disable_ssl_verification=False)
+                    logging.info("Forced reconnect issued after on_noreconnect.")
+                except Exception:
+                    logging.exception("Forced reconnect attempt failed.")
+
+            Thread(target=_restart, daemon=True).start()
 
         def on_reconnect(ws, attempt_count):
             logging.warning(f"Reconnecting... Attempt #{attempt_count}")
@@ -250,6 +281,27 @@ class ZerodhaClient:
 
         logging.info("Starting live data stream...")
         self.kws.connect(threaded=True, disable_ssl_verification=False)
+
+    def add_symbol(self, symbol, exchange=None):
+        """Subscribe one more symbol on the ALREADY-OPEN websocket
+        connection — no reconnect needed. KiteTicker's subscribe()/
+        set_mode() are plain instance methods, safe to call any time the
+        connection is open, not just from on_connect (confirmed against
+        kiteconnect's own KiteTicker — it just sends a websocket message
+        and updates its own internal subscribed_tokens, which is also
+        what a later auto-reconnect resubscribes from). Call this AFTER
+        the corresponding LiveEngine slots exist (see
+        runners/paper_trading/hot_add.py) — a tick for a symbol the
+        engine doesn't know about yet would KeyError."""
+        exchange = exchange or self.exchange
+        if symbol in self.tokens.values():
+            return
+
+        token = self.get_instrument_token(symbol, exchange)
+        self.tokens[token] = symbol
+        self.kws.subscribe([token])
+        self.kws.set_mode(self.kws.MODE_FULL, [token])
+        logging.info("Hot-subscribed %s (token %s) on the live feed", symbol, token)
 
 
 

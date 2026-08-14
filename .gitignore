@@ -33,6 +33,7 @@ TestResults.xml
 
 # Environment variables
 .env
+.env.scratch
 
 # Project data
 historical_data/

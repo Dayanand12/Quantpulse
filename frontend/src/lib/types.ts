@@ -158,7 +158,14 @@ export interface MarketAnalysis {
 }
 
 export interface Watchlist {
+  id: number
+  name: string
   symbols: string[]
+}
+
+export interface SymbolSuggestion {
+  tradingsymbol: string
+  name: string
 }
 
 export interface StrategyInfo {

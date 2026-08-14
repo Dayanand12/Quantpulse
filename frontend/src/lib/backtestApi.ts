@@ -6,6 +6,12 @@ import type {
   BatchJob,
   BatchRunConfig,
   BatchRunResponse,
+  ChainSweep,
+  ChainSweepRequest,
+  NamedWatchlist,
+  OptionContractInfo,
+  OptionUnderlying,
+  RollingAtmRequest,
   StrategyInfo,
 } from "./backtestTypes"
 import { API_BASE } from "./config"
@@ -76,9 +82,26 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function postBlob(path: string, body: unknown): Promise<Blob> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null)
+    throw new Error(detail?.detail ?? `${path} -> ${res.status}`)
+  }
+  return res.blob()
+}
+
 export const backtestApi = {
   strategies: () => getJSON<StrategyInfo[]>("/api/backtest/strategies"),
   watchlist: () => getJSON<{ symbols: string[] }>("/api/backtest/watchlist"),
+  // Every individual named watchlist, not just the union above — lets the
+  // Backtest form run against one specific group (see core/domain/models.py
+  // ::Watchlist / the Settings page's multi-watchlist manager).
+  watchlists: () => getJSON<NamedWatchlist[]>("/api/backtest/watchlists"),
   run: (config: BacktestRunConfig) => postJSON<BacktestRunResult>("/api/backtest/run", config),
   // The "6 panels" feature — same strategy, up to 6 parameter-override
   // sets, run in one request (parallelized server-side). `config.panels`
@@ -102,6 +125,11 @@ export const backtestApi = {
   // into an LLM for tuning research all at once.
   exportResultsExcel: (strategy: string) =>
     getBlob(`/api/backtest/results/export?strategy=${encodeURIComponent(strategy)}`),
+  // Same file shape, but for a caller-picked subset of result ids — the
+  // Analysis tab's filter panel narrows the list client-side; this
+  // exports exactly what's currently showing instead of every stored run.
+  exportSelectedResultsExcel: (resultIds: number[]) =>
+    postBlob("/api/backtest/results/export-selected", { result_ids: resultIds }),
   // Bulk upload: an Excel of parameter scenarios, processed in the
   // background — `form` carries the strategy, shared run settings, and
   // the file itself (multipart, not JSON). Returns immediately once
@@ -133,4 +161,41 @@ export const backtestApi = {
   deleteStrategy: (name: string) =>
     deleteJSON<{ deleted: string }>(`/api/backtest/strategies/${encodeURIComponent(name)}`),
   deleteResult: (id: number) => deleteJSON<{ deleted: number }>(`/api/backtest/results/${id}`),
+  // Contract picker data source, in three narrowing steps — see
+  // backtest_server.py's /api/backtest/options/* (reads historical_data_dir/
+  // options/{stocks,index}/ directly, populated by Data_ingestion/
+  // options_ingest_stock.py / options_ingest_index.py).
+  optionUnderlyings: () => getJSON<OptionUnderlying[]>("/api/backtest/options/underlyings"),
+  optionExpiries: (underlying: string, category: string) =>
+    getJSON<string[]>(
+      `/api/backtest/options/expiries?underlying=${encodeURIComponent(underlying)}&category=${encodeURIComponent(category)}`,
+    ),
+  optionContracts: (underlying: string, category: string, expiry: string) =>
+    getJSON<OptionContractInfo[]>(
+      `/api/backtest/options/contracts?underlying=${encodeURIComponent(underlying)}&category=${encodeURIComponent(category)}&expiry=${encodeURIComponent(expiry)}`,
+    ),
+  // The chain-sweep feature — one strategy/config run against every
+  // contract for an underlying, background job (poll getChainSweep for
+  // progress). See backtest_server.py's /api/backtest/options/chain-sweep*.
+  createChainSweep: (req: ChainSweepRequest) =>
+    postJSON<ChainSweep>("/api/backtest/options/chain-sweep", req),
+  getChainSweep: (id: number) => getJSON<ChainSweep>(`/api/backtest/options/chain-sweep/${id}`),
+  listChainSweeps: (strategy: string) =>
+    getJSON<ChainSweep[]>(`/api/backtest/options/chain-sweeps?strategy=${encodeURIComponent(strategy)}`),
+  // Options Analysis tab's data source — filtered server-side to just this
+  // strategy's option-shaped rows (optionally one underlying), so a
+  // strategy with thousands of mixed equity+option rows doesn't force
+  // fetching/rendering everything the way the plain Analysis tab's
+  // `results()` does. See backtest_server.py's /api/backtest/options/results*.
+  optionResults: (strategy: string, underlying?: string) =>
+    getJSON<BacktestResultSummary[]>(
+      `/api/backtest/options/results?strategy=${encodeURIComponent(strategy)}` +
+        (underlying ? `&underlying=${encodeURIComponent(underlying)}` : ""),
+    ),
+  optionResultUnderlyings: (strategy: string) =>
+    getJSON<string[]>(`/api/backtest/options/results/underlyings?strategy=${encodeURIComponent(strategy)}`),
+  // Rolling ATM — synchronous (unlike chain sweep), since one underlying's
+  // full roll is ~20 single-contract backtests, not hundreds to thousands.
+  runRollingAtm: (req: RollingAtmRequest) =>
+    postJSON<BacktestRunResult>("/api/backtest/options/rolling-atm", req),
 }

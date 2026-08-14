@@ -1,5 +1,6 @@
 import polars as pl
 import datetime as dt
+import threading
 from typing import List, Optional
 
 from core.domain.indicator_registry import IndicatorSpec
@@ -63,6 +64,13 @@ class LiveEngine:
 
         # symbol -> timeframe -> {ltp, ema5, ..., orb_low, distance_to_or_low}
         self.indicator_snapshot = {}
+        # Guards every insertion of a NEW top-level key into
+        # indicator_snapshot (first candle for a symbol, or add_symbol())
+        # against get_snapshot()'s concurrent iteration — a dict changing
+        # size mid-iteration raises RuntimeError. Existing-key updates
+        # (_update_snapshot's per-timeframe assignment) don't change dict
+        # size, so they don't need the lock.
+        self._snapshot_lock = threading.Lock()
 
         # OR tracking per symbol — wall-clock (9:15-9:30), independent of
         # any strategy's chosen timeframe.
@@ -219,7 +227,8 @@ class LiveEngine:
 
     def _recompute_all_timeframes(self, symbol):
         base_df = self.data[symbol]
-        self.indicator_snapshot.setdefault(symbol, {})
+        with self._snapshot_lock:
+            self.indicator_snapshot.setdefault(symbol, {})
 
         for timeframe, minutes in SUPPORTED_TIMEFRAMES.items():
             tf_df = base_df if minutes == 1 else self._resample(base_df, minutes)
@@ -324,11 +333,38 @@ class LiveEngine:
         self.indicator_snapshot[symbol][timeframe] = snapshot
 
     def get_snapshot(self, timeframe="minute"):
-        return {
-            symbol: tf_snapshots[timeframe]
-            for symbol, tf_snapshots in self.indicator_snapshot.items()
-            if timeframe in tf_snapshots
-        }
+        with self._snapshot_lock:
+            return {
+                symbol: tf_snapshots[timeframe]
+                for symbol, tf_snapshots in self.indicator_snapshot.items()
+                if timeframe in tf_snapshots
+            }
 
     def status(self):
         return self.broker.status()
+
+    def add_symbol(self, symbol):
+        """Register a brand-new symbol on an already-running engine (hot
+        watchlist addition, see runners/paper_trading/hot_add.py) —
+        mirrors exactly what __init__ seeds per symbol above. A no-op if
+        the symbol is already tracked. Caller is responsible for warm-
+        starting it (runners/paper_trading/warm_start.py) and subscribing
+        it on the live feed AFTER this returns, in that order — ticks/
+        candles for a symbol not yet seeded here would KeyError."""
+        if symbol in self.data:
+            return
+
+        self.symbols.append(symbol)
+        self.data[symbol] = pl.DataFrame(
+            schema={
+                "date": pl.Datetime,
+                "open": pl.Float64,
+                "high": pl.Float64,
+                "low": pl.Float64,
+                "close": pl.Float64,
+                "volume": pl.Float64,
+            }
+        )
+        self.or_data[symbol] = {"high": None, "low": None, "locked": False, "date": None}
+        with self._snapshot_lock:
+            self.indicator_snapshot.setdefault(symbol, {})

@@ -12,7 +12,9 @@ const NAV_ITEMS = [
   { to: "/strategies", label: "Strategies" },
   { to: "/strategy-builder", label: "Strategy Builder" },
   { to: "/backtest", label: "Backtest" },
+  { to: "/options-backtest", label: "Options Backtest" },
   { to: "/analysis", label: "Analysis" },
+  { to: "/options-analysis", label: "Options Analysis" },
   { to: "/settings", label: "Settings" },
 ]
 

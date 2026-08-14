@@ -30,3 +30,18 @@ class IBacktestResultRepository(ABC):
     def delete_result(self, result_id: int) -> None:
         """Removes one stored run. A no-op if it doesn't exist — deleting
         something already gone isn't an error."""
+
+    @abstractmethod
+    def list_option_results(self, strategy_name: str, underlying: Optional[str] = None) -> List[BacktestResult]:
+        """Every stored OPTION run for one strategy (option_underlying IS
+        NOT NULL — see models.py::BacktestResultRecord), optionally
+        narrowed to one underlying. Feeds the Options Analysis tab — a
+        strategy swept across a full option chain can have thousands of
+        rows, so this filters in SQL rather than the caller fetching
+        list_results() and filtering client-side."""
+
+    @abstractmethod
+    def list_option_underlyings(self, strategy_name: str) -> List[str]:
+        """Distinct underlyings this strategy has ANY stored option result
+        for, alphabetical — populates the Options Analysis tab's
+        Underlying filter without fetching every row first."""

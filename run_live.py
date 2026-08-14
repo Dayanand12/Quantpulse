@@ -19,7 +19,9 @@ from infrastructure.logging.logger import configure_logging, get_logger
 from infrastructure.persistence.migrate import run_migrations
 from runners.paper_trading.deployment_runner import run_deployments
 from runners.paper_trading.eod_scheduler import run_eod_scheduler
+from runners.paper_trading.feed_watchdog import run_feed_watchdog
 from runners.paper_trading.regime_call_evaluator import run_regime_call_evaluator
+from runners.backtesting.telegram_bot import TelegramClient
 from server.main import create_app
 
 
@@ -103,15 +105,46 @@ def main():
     # -----------------------------
     # Start Zerodha WebSocket
     # -----------------------------
-    container.market_data_provider.start(container.watchlist_repository.get_symbols())
+    container.market_data_provider.start(container.watchlist_repository.get_all_symbols())
+
+    # -----------------------------
+    # Feed watchdog: Telegram alert if the live tick feed goes stale
+    # (reuses the existing backtest-bot's TelegramClient + the same
+    # telegram_allowed_user_id as the DM target). Off entirely if the bot
+    # isn't configured, same as the backtest bot itself.
+    # -----------------------------
+    if settings.telegram_bot_token and settings.telegram_allowed_user_id:
+        threading.Thread(
+            target=lambda: run_feed_watchdog(
+                container.market_data_provider,
+                TelegramClient(settings.telegram_bot_token),
+                settings.telegram_allowed_user_id,
+                settings.feed_stale_threshold_seconds,
+            ),
+            daemon=True,
+        ).start()
+        logger.info(
+            "Feed watchdog started (alerts via Telegram if quiet for >%ss during market hours).",
+            settings.feed_stale_threshold_seconds,
+        )
+    else:
+        logger.warning("Telegram not configured — feed watchdog alerts are disabled.")
 
     # -----------------------------
     # Tick Processing Loop (Background Thread)
     # -----------------------------
     def tick_loop():
+        # One bad tick/indicator edge case must not kill this daemon thread
+        # silently — that leaves the FastAPI server up and responsive while
+        # nothing actually processes ticks anymore, which looks like
+        # "everything's fine" from outside (see 2026-08-11 incident: engine
+        # froze for hours with no error visible anywhere).
         while True:
-            for symbol, tick in container.market_data_provider.get_latest_ticks().items():
-                container.trading_engine.process_tick(symbol, tick)
+            try:
+                for symbol, tick in container.market_data_provider.get_latest_ticks().items():
+                    container.trading_engine.process_tick(symbol, tick)
+            except Exception:
+                logger.exception("tick_loop iteration failed — continuing")
             time.sleep(0.5)
 
     threading.Thread(
