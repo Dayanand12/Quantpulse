@@ -59,6 +59,20 @@ def test_filters_by_strategy_name(tmp_path):
     assert trades[0].strategy_name == "ema_crossover"
 
 
+def test_filters_by_deployment_id(tmp_path):
+    # Regression: the same strategy_name deployed twice (e.g. two
+    # timeframes) needs deployment_id to tell the two runs' trades apart —
+    # strategy_name alone can't.
+    session_factory, repo = make_repo(tmp_path)
+    add_trade(session_factory, strategy_name="ema_crossover", deployment_id="dep_5min")
+    add_trade(session_factory, strategy_name="ema_crossover", deployment_id="dep_15min")
+
+    trades = repo.list_trades(TradeFilter(deployment_id="dep_15min"))
+
+    assert len(trades) == 1
+    assert trades[0].deployment_id == "dep_15min"
+
+
 def test_filters_by_symbol(tmp_path):
     session_factory, repo = make_repo(tmp_path)
     add_trade(session_factory, symbol="RELIANCE")
@@ -113,6 +127,7 @@ def test_maps_all_fields_correctly(tmp_path):
         entry_price=1500.0,
         exit_price=1520.0,
         pnl=100.0,
+        opened_at=dt.datetime(2026, 1, 1, 9, 20),
         initial_stop_loss=1480.0,
         deployment_id="depX",
         strategy_name="ema_crossover",
@@ -126,6 +141,7 @@ def test_maps_all_fields_correctly(tmp_path):
     assert trade.entry_price == 1500.0
     assert trade.exit_price == 1520.0
     assert trade.pnl == 100.0
+    assert trade.opened_at == dt.datetime(2026, 1, 1, 9, 20)
     assert trade.initial_stop_loss == 1480.0
     assert trade.deployment_id == "depX"
     assert trade.strategy_name == "ema_crossover"

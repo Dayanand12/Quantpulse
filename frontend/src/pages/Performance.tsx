@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react"
+import { BacktestTradesTable } from "../components/backtest/BacktestTradesTable"
 import { ChartCard } from "../components/analytics/ChartCard"
 import { DrawdownChart } from "../components/analytics/DrawdownChart"
 import { EquityCurveChart } from "../components/analytics/EquityCurveChart"
@@ -15,12 +17,55 @@ import { StrategyTrendChart } from "../components/analytics/StrategyTrendChart"
 import { SummaryCardRow } from "../components/analytics/SummaryCard"
 import { WinRateGauge } from "../components/analytics/WinRateGauge"
 import { useAnalytics } from "../hooks/useAnalytics"
+import { api } from "../lib/api"
+import type { StrategyBreakdown, Trade } from "../lib/types"
 
 const PERIOD_LABEL = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" } as const
 
 export function Performance() {
   const { filters, setFilters, resetFilters, data, loading, error } = useAnalytics()
   const showSkeleton = loading && !data
+
+  // Holds the whole row, not just strategy_name — the same strategy can be
+  // deployed more than once (e.g. two timeframes), and only deployment_id
+  // tells those apart when fetching this row's trades below.
+  const [selectedRow, setSelectedRow] = useState<StrategyBreakdown | null>(null)
+  const [strategyTrades, setStrategyTrades] = useState<Trade[]>([])
+  const [tradesLoading, setTradesLoading] = useState(false)
+  const [tradesError, setTradesError] = useState<string | null>(null)
+
+  // Same filters already applied to the by_strategy breakdown above, so the
+  // trades shown here always match the row's summarized metrics — narrowed
+  // to just the clicked deployment (falling back to strategy_name alone
+  // only for a deleted deployment, which has no deployment_id to filter on).
+  useEffect(() => {
+    if (!selectedRow) return
+    let cancelled = false
+    setTradesLoading(true)
+    setTradesError(null)
+
+    api
+      .trades({
+        strategy: selectedRow.strategy_name,
+        deployment_id: selectedRow.deployment_id ?? undefined,
+        symbol: filters.symbol,
+        date_from: filters.date_from,
+        date_to: filters.date_to,
+      })
+      .then((res) => {
+        if (!cancelled) setStrategyTrades(res)
+      })
+      .catch(() => {
+        if (!cancelled) setTradesError("Failed to load trades.")
+      })
+      .finally(() => {
+        if (!cancelled) setTradesLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedRow, filters.symbol, filters.date_from, filters.date_to])
 
   return (
     <div className="flex flex-col gap-6">
@@ -66,7 +111,35 @@ export function Performance() {
         >
           <SummaryCardRow metrics={data.overall} />
 
-          <StrategyTable rows={data.by_strategy} />
+          <StrategyTable
+            rows={data.by_strategy}
+            selectedDeploymentId={selectedRow?.deployment_id}
+            onSelectRow={(row) =>
+              setSelectedRow((prev) =>
+                prev?.deployment_id === row.deployment_id && prev?.strategy_name === row.strategy_name
+                  ? null
+                  : row,
+              )
+            }
+          />
+
+          {selectedRow && (
+            <ChartCard
+              title={`${selectedRow.strategy_name}${selectedRow.timeframe ? ` (${selectedRow.timeframe})` : ""} — Trades`}
+              subtitle="Every closed trade for this deployment under the current filters — check market condition at entry to see where it worked and where it didn't"
+            >
+              {tradesError && <p className="text-sm text-[var(--status-critical)]">{tradesError}</p>}
+              {tradesLoading ? (
+                <TableSkeleton />
+              ) : (
+                <BacktestTradesTable
+                  trades={strategyTrades}
+                  truncated={false}
+                  showOi={strategyTrades.some((t) => t.entry_oi != null)}
+                />
+              )}
+            </ChartCard>
+          )}
 
           <ChartCard
             title="Strategy × Symbol"

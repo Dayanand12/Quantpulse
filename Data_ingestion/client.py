@@ -165,6 +165,25 @@ class ZerodhaClient:
 
         raise ValueError(f"❌ Token not found for {symbol}")
 
+    def find_instrument(self, symbol, exchange=None):
+        """Instrument token + actual listing exchange for symbol, or None
+        if not found. Same lookup as get_instrument_token() but non-raising
+        and also returns the listing exchange (not necessarily the
+        `exchange` argument — matters for F&O symbols found only via the
+        global fallback) — for optional-by-nature callers like building an
+        external chart deep-link."""
+        exchange = exchange or self.exchange
+
+        for inst in self._cached_instruments(exchange):
+            if inst["tradingsymbol"] == symbol:
+                return {"instrument_token": inst["instrument_token"], "exchange": inst["exchange"]}
+
+        for inst in self._cached_instruments():
+            if inst["tradingsymbol"] == symbol:
+                return {"instrument_token": inst["instrument_token"], "exchange": inst["exchange"]}
+
+        return None
+
     def fetch_historical_data(self, symbol, interval, from_date, to_date, exchange):
         """Fetch OHLC historical data."""
         exchange = exchange or self.exchange

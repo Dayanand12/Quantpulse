@@ -39,3 +39,17 @@ def test_trade_from_raw_leaves_market_fields_none_without_a_snapshot():
     assert trade.entry_vwap is None
     assert trade.entry_volume_ratio is None
     assert trade.market_condition is None
+
+
+def test_trade_from_raw_maps_opened_at():
+    opened = dt.datetime(2026, 1, 1, 9, 20)
+
+    trade = trade_from_raw(_raw_trade(opened_at=opened))
+
+    assert trade.opened_at == opened
+
+
+def test_trade_from_raw_defaults_opened_at_to_none_without_the_key():
+    trade = trade_from_raw(_raw_trade())
+
+    assert trade.opened_at is None

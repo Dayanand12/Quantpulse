@@ -39,6 +39,7 @@ class SqlTradeJournal:
                         exit_price=trade.exit_price,
                         pnl=trade.pnl,
                         closed_at=trade.closed_at,
+                        opened_at=trade.opened_at,
                         initial_stop_loss=trade.initial_stop_loss,
                         deployment_id=trade.deployment_id,
                         strategy_name=trade.strategy_name,

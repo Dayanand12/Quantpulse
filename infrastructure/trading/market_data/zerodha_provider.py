@@ -10,7 +10,7 @@ import time
 from typing import Dict, List, Optional
 
 from core.application.interfaces.market_data_provider import IMarketDataProvider
-from core.domain.models import Tick
+from core.domain.models import InstrumentRef, Tick
 from Data_ingestion.client import ZerodhaClient
 
 
@@ -43,3 +43,9 @@ class ZerodhaMarketDataProvider(IMarketDataProvider):
             for symbol, data in self._client.market_data.items()
             if "LTP" in data
         }
+
+    def find_instrument(self, symbol: str) -> Optional[InstrumentRef]:
+        info = self._client.find_instrument(symbol, self._exchange)
+        if info is None:
+            return None
+        return InstrumentRef(instrument_token=info["instrument_token"], exchange=info["exchange"])

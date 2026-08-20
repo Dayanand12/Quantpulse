@@ -22,6 +22,18 @@ class Instrument:
 
 
 @dataclass(frozen=True)
+class InstrumentRef:
+    """Broker-assigned identity for a symbol — the instrument_token and
+    actual listing exchange from Kite's own instrument dump. Not used by
+    any trading/backtesting logic; exists only for building external
+    deep-links (e.g. a Kite chart URL), which need the same instrument
+    identity Kite Web itself uses."""
+
+    instrument_token: int
+    exchange: str
+
+
+@dataclass(frozen=True)
 class Tick:
     symbol: str
     ltp: float
@@ -94,6 +106,12 @@ class Trade:
     exit_price: float
     pnl: float
     closed_at: datetime = field(default_factory=datetime.now)
+    # When the position was actually opened — None for trades closed
+    # before this field existed, or whose position was already open in
+    # memory when it was added (see PaperBroker.enter()/exit()). Needed to
+    # locate a trade on an external chart, where closed_at alone only
+    # marks the exit.
+    opened_at: Optional[datetime] = None
     # The stop-loss actually set at entry — the basis for R-multiple
     # (see core/domain/metrics.py). None for trades closed before this
     # field existed; those are simply excluded from R-multiple averaging.

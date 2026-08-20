@@ -58,6 +58,7 @@ class PaperBroker:
             "side": side,
             "qty": quantity,
             "entry": price,
+            "entered_at": datetime.now(),
             # The strategy's own indicator snapshot at entry (ltp, rsi,
             # adx, vwap, volume_ratio, ...) — carried through to exit()'s
             # trade_log entry purely for after-the-fact research; never
@@ -92,6 +93,10 @@ class PaperBroker:
             "qty": pos["qty"],
             "pnl": pnl,
             "initial_stop_loss": initial_stop_loss,
+            # None for a position opened before this field existed (still
+            # open in memory when this code was deployed) — see
+            # trade_from_raw's guard.
+            "opened_at": pos.get("entered_at"),
             "closed_at": datetime.now(),
             "market_snapshot": pos.get("market_snapshot"),
         })

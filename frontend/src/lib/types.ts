@@ -65,6 +65,15 @@ export interface Trade {
   net_pnl: number | null
   deployment_id?: string
   strategy_name?: string
+  closed_at: string // ISO datetime
+  // When the position was actually opened — null for trades closed before
+  // this field existed, or whose position was already open in memory when
+  // it was added (see core/domain/models.py::Trade.opened_at).
+  opened_at: string | null
+  // The market condition the strategy saw at entry (see core/domain/
+  // models.py::Trade.market_condition) — the "why" behind a win or loss.
+  market_condition: string | null
+  entry_oi: number | null
 }
 
 export interface BrokerStatus {
@@ -297,6 +306,12 @@ export interface StrategyBreakdown {
   strategy_name: string
   deployment_id: string | null
   capital: number
+  // The deployment's candle timeframe (see core/domain/models.py::
+  // StrategyConfig.timeframe) — null only for a row whose deployment has
+  // since been deleted. Distinguishes two deployments of the same
+  // strategy_name running on different timeframes, which otherwise look
+  // identical in a strategy_name-only view.
+  timeframe: string | null
   metrics: PerformanceMetrics
 }
 

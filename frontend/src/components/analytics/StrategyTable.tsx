@@ -21,6 +21,13 @@ function pnlColor(v: number): string {
 // (Sortino, Calmar, ...) is one entry here, not new table markup.
 const TABLE_COLUMNS: ColumnConfig[] = [
   { key: "strategy_name", label: "Strategy", align: "left", value: (r) => r.strategy_name },
+  {
+    key: "timeframe",
+    label: "Timeframe",
+    align: "left",
+    value: (r) => r.timeframe,
+    render: (r) => r.timeframe ?? "—",
+  },
   { key: "total_trades", label: "Trades", align: "right", value: (r) => r.metrics.total_trades },
   {
     key: "win_rate",
@@ -108,6 +115,13 @@ interface StrategyTableProps {
   title?: string
   firstColumnLabel?: string
   searchPlaceholder?: string
+  // When set, rows become clickable — used by the Performance page to
+  // drill from a strategy's aggregate metrics into its individual trades.
+  onSelectRow?: (row: StrategyBreakdown) => void
+  // Keyed by deployment_id, not strategy_name — the same strategy can be
+  // deployed more than once (e.g. two timeframes), which would otherwise
+  // highlight every row sharing that name instead of just the clicked one.
+  selectedDeploymentId?: string | null
 }
 
 export function StrategyTable({
@@ -115,6 +129,8 @@ export function StrategyTable({
   title = "Strategy Comparison",
   firstColumnLabel = "Strategy",
   searchPlaceholder = "Search strategies…",
+  onSelectRow,
+  selectedDeploymentId,
 }: StrategyTableProps) {
   const [search, setSearch] = useState("")
   const [sortKey, setSortKey] = useState("total_pnl")
@@ -207,8 +223,13 @@ export function StrategyTable({
                 sorted.map((row, i) => (
                   <tr
                     key={row.deployment_id ?? `${row.strategy_name}-${i}`}
+                    onClick={onSelectRow ? () => onSelectRow(row) : undefined}
                     className={`transition-colors hover:bg-white/[0.04] ${
                       i % 2 === 1 ? "bg-white/[0.015]" : ""
+                    } ${onSelectRow ? "cursor-pointer" : ""} ${
+                      selectedDeploymentId != null && selectedDeploymentId === row.deployment_id
+                        ? "bg-[var(--accent)]/10"
+                        : ""
                     }`}
                   >
                     {TABLE_COLUMNS.map((col) => (

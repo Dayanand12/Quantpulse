@@ -98,6 +98,18 @@ def test_rejections_are_tracked_independently_per_symbol():
     assert set(broker.rejected_entries.keys()) == {"MRF"}
 
 
+def test_exit_carries_the_entry_timestamp_stamped_by_enter():
+    broker = PaperBroker(initial_capital=300_000)
+
+    broker.enter("RELIANCE", "SELL", 250.0, 50)
+    entered_at = broker.positions["RELIANCE"]["entered_at"]
+    assert entered_at is not None
+
+    broker.exit("RELIANCE", 244.0)
+
+    assert broker.trade_log[-1]["opened_at"] == entered_at
+
+
 def test_status_includes_rejected_entries():
     broker = PaperBroker(initial_capital=50_000)
     broker.enter("MRF", "BUY", 120_000.0, 1)

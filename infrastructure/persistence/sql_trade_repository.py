@@ -34,6 +34,7 @@ def record_to_trade(record: TradeRecord) -> Trade:
         exit_price=record.exit_price,
         pnl=record.pnl,
         closed_at=record.closed_at,
+        opened_at=record.opened_at,
         initial_stop_loss=record.initial_stop_loss,
         deployment_id=record.deployment_id,
         strategy_name=record.strategy_name,
@@ -58,6 +59,8 @@ class SqlTradeRepository(ITradeRepository):
 
         if filters.strategy_name:
             stmt = stmt.where(TradeRecord.strategy_name == filters.strategy_name)
+        if filters.deployment_id:
+            stmt = stmt.where(TradeRecord.deployment_id == filters.deployment_id)
         if filters.symbol:
             stmt = stmt.where(TradeRecord.symbol == filters.symbol)
         if filters.date_from:

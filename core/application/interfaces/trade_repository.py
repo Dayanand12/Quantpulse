@@ -21,6 +21,10 @@ class TradeFilter:
     symbol: Optional[str] = None
     date_from: Optional[date] = None
     date_to: Optional[date] = None  # inclusive
+    # Narrows to one deployment — matters when the same strategy_name is
+    # deployed more than once (e.g. the same strategy on two different
+    # timeframes), where strategy_name alone can't tell the trades apart.
+    deployment_id: Optional[str] = None
 
 
 class ITradeRepository(ABC):

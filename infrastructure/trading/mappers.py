@@ -36,6 +36,10 @@ def trade_from_raw(raw: dict) -> Trade:
     if "closed_at" in raw:
         kwargs["closed_at"] = raw["closed_at"]
 
+    # None for trades logged before this field existed, or whose position
+    # was already open in memory when it was added (see PaperBroker.exit()).
+    kwargs["opened_at"] = raw.get("opened_at")
+
     # The strategy's own indicator snapshot at entry (see
     # PaperBroker.enter()) — None for trades from before this existed, or
     # if no snapshot was available (e.g. rejected entries never get here).

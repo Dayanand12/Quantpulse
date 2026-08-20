@@ -73,8 +73,24 @@ export const api = {
     return getJSON<AnalyticsSummary>(`/api/analytics/summary?${params.toString()}`)
   },
 
-  trades: (params?: { today?: boolean }) =>
-    getJSON<Trade[]>(`/api/trades${params?.today ? "?today=true" : ""}`),
+  trades: (params?: {
+    today?: boolean
+    strategy?: string
+    deployment_id?: string
+    symbol?: string
+    date_from?: string
+    date_to?: string
+  }) => {
+    const search = new URLSearchParams()
+    if (params?.today) search.set("today", "true")
+    if (params?.strategy) search.set("strategy", params.strategy)
+    if (params?.deployment_id) search.set("deployment_id", params.deployment_id)
+    if (params?.symbol) search.set("symbol", params.symbol)
+    if (params?.date_from) search.set("date_from", params.date_from)
+    if (params?.date_to) search.set("date_to", params.date_to)
+    const qs = search.toString()
+    return getJSON<Trade[]>(`/api/trades${qs ? `?${qs}` : ""}`)
+  },
 
   deployments: () => getJSON<Deployment[]>("/api/deployments"),
   createDeployment: (input: DeploymentInput) =>
@@ -83,6 +99,11 @@ export const api = {
     sendJSON<Deployment>(`/api/deployments/${id}`, "PUT", input),
   deleteDeployment: (id: string) =>
     sendJSON<{ deleted: string }>(`/api/deployments/${id}`, "DELETE"),
+
+  instrumentRefs: (symbols: string[]) =>
+    getJSON<Record<string, { instrument_token: number; exchange: string } | null>>(
+      `/api/instrument-refs?symbols=${encodeURIComponent(symbols.join(","))}`,
+    ),
 
   chargeConfig: () => getJSON<ChargeConfig>("/api/settings/charges"),
   saveChargeConfig: (config: ChargeConfig) =>

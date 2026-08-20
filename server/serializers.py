@@ -34,6 +34,10 @@ def trade_to_dict(trade: Trade) -> dict:
         "net_pnl": trade.net_pnl,
         "deployment_id": trade.deployment_id,
         "strategy_name": trade.strategy_name,
+        "closed_at": trade.closed_at.isoformat(),
+        "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
+        "market_condition": trade.market_condition,
+        "entry_oi": trade.entry_oi,
     }
 
 

@@ -30,6 +30,7 @@ class TradeRecord(Base):
     exit_price: Mapped[float] = mapped_column(Float)
     pnl: Mapped[float] = mapped_column(Float)
     closed_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    opened_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     initial_stop_loss: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     deployment_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
     strategy_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

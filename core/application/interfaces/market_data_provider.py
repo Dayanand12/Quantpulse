@@ -10,7 +10,7 @@ to know or care which one is in use.
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
-from core.domain.models import Tick
+from core.domain.models import InstrumentRef, Tick
 
 
 class IMarketDataProvider(ABC):
@@ -33,3 +33,9 @@ class IMarketDataProvider(ABC):
         The feed-health signal — market_data can hold stale values forever
         after a dead websocket, so this has to come from callback activity,
         not from whether get_latest_ticks() returns anything."""
+
+    @abstractmethod
+    def find_instrument(self, symbol: str) -> Optional[InstrumentRef]:
+        """Broker instrument identity for symbol, or None if not found in
+        the broker's instrument dump. For building external deep-links
+        only — nothing in the trading/backtesting path depends on this."""

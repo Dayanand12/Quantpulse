@@ -19,6 +19,10 @@ export interface BacktestTrade {
   symbol: string
   side: "BUY" | "SELL"
   closed_at: string // ISO datetime
+  // Entry timestamp — only populated for live/paper trades (see
+  // core/domain/models.py::Trade.opened_at); a simulated backtest run
+  // doesn't produce this, so it's absent there rather than always null.
+  opened_at?: string | null
   entry: number
   exit: number
   qty: number

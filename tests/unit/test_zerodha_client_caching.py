@@ -43,6 +43,37 @@ def test_raises_when_symbol_not_found_anywhere():
         pass
 
 
+def test_find_instrument_returns_token_and_exchange():
+    client = make_client(instruments_by_exchange={
+        "NSE": [{"tradingsymbol": "RELIANCE", "instrument_token": 738561, "exchange": "NSE"}],
+    })
+
+    assert client.find_instrument("RELIANCE", "NSE") == {
+        "instrument_token": 738561,
+        "exchange": "NSE",
+    }
+
+
+def test_find_instrument_falls_back_to_global_instruments():
+    client = make_client(
+        instruments_by_exchange={"NSE": []},
+        global_instruments=[
+            {"tradingsymbol": "NIFTY24AUG24000CE", "instrument_token": 12345, "exchange": "NFO"}
+        ],
+    )
+
+    assert client.find_instrument("NIFTY24AUG24000CE", "NSE") == {
+        "instrument_token": 12345,
+        "exchange": "NFO",
+    }
+
+
+def test_find_instrument_returns_none_instead_of_raising():
+    client = make_client(instruments_by_exchange={"NSE": []}, global_instruments=[])
+
+    assert client.find_instrument("NOPE", "NSE") is None
+
+
 def test_instruments_are_only_fetched_once_per_exchange():
     client = make_client(instruments_by_exchange={
         "NSE": [{"tradingsymbol": "RELIANCE", "instrument_token": 123}],

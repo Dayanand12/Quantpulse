@@ -417,17 +417,53 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
         return build_positions_view()
 
     @app.get("/api/trades")
-    def trades(today: bool = False):
+    def trades(
+        today: bool = False,
+        strategy: Optional[str] = None,
+        deployment_id: Optional[str] = None,
+        symbol: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
         # Persisted (survives restarts), not aggregate_broker_status's
         # in-memory trade_log — see list_deployments() above for why.
         # `today` is resolved server-side (not passed as a date string by
         # the caller) so the Live Dashboard's "today" always matches this
         # process's own clock, not the browser's — no timezone mismatch.
-        filters = None
         if today:
             server_today = dt.date.today()
             filters = TradeFilter(date_from=server_today, date_to=server_today)
+        elif strategy or deployment_id or symbol or date_from or date_to:
+            filters = TradeFilter(
+                strategy_name=strategy or None,
+                deployment_id=deployment_id or None,
+                symbol=symbol or None,
+                date_from=dt.date.fromisoformat(date_from) if date_from else None,
+                date_to=dt.date.fromisoformat(date_to) if date_to else None,
+            )
+        else:
+            filters = None
         return [trade_to_dict(t) for t in container.trade_repository.list_trades(filters)]
+
+    @app.get("/api/instrument-refs")
+    def instrument_refs(symbols: str):
+        # For building an external "view chart on Kite" deep-link from the
+        # trades table — the URL needs Kite's own instrument_token, which
+        # only its instrument dump has (see core/domain/models.py::
+        # InstrumentRef). Symbols not found (e.g. delisted, or the live
+        # backend's own instrument cache hasn't warmed up) map to null —
+        # the frontend just omits the link for those, not an error.
+        result = {}
+        for symbol in symbols.split(","):
+            if not symbol:
+                continue
+            ref = container.market_data_provider.find_instrument(symbol)
+            result[symbol] = (
+                {"instrument_token": ref.instrument_token, "exchange": ref.exchange}
+                if ref
+                else None
+            )
+        return result
 
     # -----------------------------
     # REST: performance analytics (persisted trade history — survives
@@ -477,6 +513,10 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 "strategy_name": deployment.strategy_name,
                 "deployment_id": deployment.id,
                 "capital": deployment.capital,
+                # Distinguishes two deployments of the same strategy_name
+                # on different timeframes — same strategy_name would
+                # otherwise render as two identical-looking rows.
+                "timeframe": deployment.config.timeframe,
                 "metrics": asdict(compute_performance_metrics(deployment_trades, deployment.capital)),
             })
 
@@ -492,6 +532,7 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 "strategy_name": strategy_name,
                 "deployment_id": deployment_id,
                 "capital": 0,
+                "timeframe": None,
                 "metrics": asdict(compute_performance_metrics(deployment_trades, 0)),
             })
 

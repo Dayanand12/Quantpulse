@@ -1,10 +1,15 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { PnlText } from "../PnlText"
 import { EmptyState } from "../analytics/EmptyState"
+import { IconExternalLink } from "../analytics/icons"
+import { api } from "../../lib/api"
 import type { BacktestTrade } from "../../lib/backtestTypes"
 import { fmtNumber } from "../../lib/format"
+import { zerodhaChartUrl } from "../../lib/zerodha"
 
 const PAGE_SIZE = 50
+
+type InstrumentRef = { instrument_token: number; exchange: string } | null
 
 export function BacktestTradesTable({
   trades,
@@ -21,6 +26,28 @@ export function BacktestTradesTable({
   const [page, setPage] = useState(0)
   const pageCount = Math.max(1, Math.ceil(trades.length / PAGE_SIZE))
   const pageTrades = trades.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+
+  // The Kite chart deep-link needs Kite's own instrument_token per symbol
+  // (see lib/zerodha.ts) — resolved from the live backend's instrument
+  // dump, one batched call per page rather than per row. Silently yields
+  // no links if that backend isn't running (e.g. viewing this table from
+  // the standalone backtest server with no live Zerodha session up).
+  const [refs, setRefs] = useState<Record<string, InstrumentRef>>({})
+  useEffect(() => {
+    const symbols = Array.from(new Set(pageTrades.map((t) => t.symbol)))
+    if (symbols.length === 0) return
+    let cancelled = false
+    api
+      .instrumentRefs(symbols)
+      .then((res) => {
+        if (!cancelled) setRefs((prev) => ({ ...prev, ...res }))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, trades])
 
   if (trades.length === 0) {
     return <EmptyState title="No trades" subtitle="This configuration produced zero trades." />
@@ -40,6 +67,7 @@ export function BacktestTradesTable({
           <thead className="sticky top-0 z-10 bg-[var(--surface-2)]">
             <tr>
               {[
+                "Opened At",
                 "Closed At",
                 "Symbol",
                 "Side",
@@ -70,10 +98,26 @@ export function BacktestTradesTable({
                 className={`transition-colors hover:bg-white/[0.04] ${i % 2 === 1 ? "bg-white/[0.015]" : ""}`}
               >
                 <td className="whitespace-nowrap border-t border-[var(--glass-border)] px-3 py-2 text-[var(--ink-muted)]">
+                  {t.opened_at ? t.opened_at.replace("T", " ").slice(0, 16) : "—"}
+                </td>
+                <td className="whitespace-nowrap border-t border-[var(--glass-border)] px-3 py-2 text-[var(--ink-muted)]">
                   {t.closed_at.replace("T", " ").slice(0, 16)}
                 </td>
                 <td className="whitespace-nowrap border-t border-[var(--glass-border)] px-3 py-2 font-medium text-[var(--ink-primary)]">
-                  {t.symbol}
+                  {refs[t.symbol] ? (
+                    <a
+                      href={zerodhaChartUrl(refs[t.symbol]!.exchange, t.symbol, refs[t.symbol]!.instrument_token)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open this symbol's chart on Zerodha Kite"
+                      className="inline-flex items-center gap-1 hover:text-[var(--accent)] hover:underline"
+                    >
+                      {t.symbol}
+                      <IconExternalLink width={12} height={12} className="opacity-50" />
+                    </a>
+                  ) : (
+                    t.symbol
+                  )}
                 </td>
                 <td className="whitespace-nowrap border-t border-[var(--glass-border)] px-3 py-2">{t.side}</td>
                 <td className="tabular-nums whitespace-nowrap border-t border-[var(--glass-border)] px-3 py-2">

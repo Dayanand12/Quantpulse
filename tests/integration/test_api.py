@@ -124,6 +124,14 @@ def test_positions_and_trades_reflect_seeded_deployment_state(tmp_path):
         assert trades[0]["pnl"] == 250.0
         assert trades[0]["deployment_id"] == runtime.deployment.id
         assert trades[0]["strategy_name"] == "orb_reversal"
+        # Entry-context fields the Performance tab's per-strategy trades
+        # drill-down needs to show where an entry worked vs. didn't.
+        assert "closed_at" in trades[0]
+        assert "market_condition" in trades[0]
+        assert "entry_oi" in trades[0]
+        # Real entry timestamp (not null) — needed to locate the trade on
+        # an external chart, where closed_at alone only marks the exit.
+        assert trades[0]["opened_at"] is not None
 
         positions = client.get("/api/positions").json()
         assert positions == []
@@ -555,6 +563,61 @@ def test_trades_today_filter_excludes_trades_from_other_days(tmp_path):
     assert today_trades[0]["symbol"] == "RELIANCE"
 
 
+def test_trades_strategy_filter_returns_only_that_strategy(tmp_path):
+    import datetime as dt
+
+    from infrastructure.persistence.database import unit_of_work
+    from infrastructure.persistence.models import TradeRecord
+
+    app, container = build_test_app(tmp_path)
+    runtime = container.deployment_runtimes[0]
+    closed_at = dt.datetime.combine(dt.date.today(), dt.time(11, 0))
+
+    with unit_of_work(container.session_factory) as session:
+        session.add(
+            TradeRecord(
+                symbol="RELIANCE", side="SELL", quantity=50, entry_price=250.0, exit_price=245.0,
+                pnl=250.0, closed_at=closed_at,
+                deployment_id=runtime.deployment.id, strategy_name="orb_reversal",
+                market_condition="Trending / High Volume / Above VWAP",
+            )
+        )
+        session.add(
+            TradeRecord(
+                symbol="TCS", side="SELL", quantity=10, entry_price=100.0, exit_price=105.0,
+                pnl=-50.0, closed_at=closed_at,
+                deployment_id=runtime.deployment.id, strategy_name="other_strategy",
+            )
+        )
+
+    with TestClient(app) as client:
+        orb_trades = client.get("/api/trades", params={"strategy": "orb_reversal"}).json()
+
+    assert len(orb_trades) == 1
+    assert orb_trades[0]["symbol"] == "RELIANCE"
+    assert orb_trades[0]["strategy_name"] == "orb_reversal"
+    assert orb_trades[0]["market_condition"] == "Trending / High Volume / Above VWAP"
+
+
+def test_instrument_refs_endpoint_resolves_known_symbols_and_omits_unknown(tmp_path):
+    app, container = build_test_app(tmp_path)
+
+    def fake_find_instrument(symbol, exchange=None):
+        if symbol == "RELIANCE":
+            return {"instrument_token": 738561, "exchange": "NSE"}
+        return None
+
+    container.market_data_provider._client.find_instrument.side_effect = fake_find_instrument
+
+    with TestClient(app) as client:
+        result = client.get(
+            "/api/instrument-refs", params={"symbols": "RELIANCE,UNKNOWN"}
+        ).json()
+
+    assert result["RELIANCE"] == {"instrument_token": 738561, "exchange": "NSE"}
+    assert result["UNKNOWN"] is None
+
+
 def test_trade_counts_survive_a_simulated_broker_restart(tmp_path):
     # Regression: total_trades/realized_pnl/win_rate on both /api/trades
     # and /api/deployments used to come from PaperBroker's in-memory
@@ -899,6 +962,58 @@ def test_analytics_summary_reflects_closed_trades(tmp_path):
     by_strategy = body["by_strategy"][0]
     assert by_strategy["strategy_name"] == "orb_reversal"
     assert by_strategy["metrics"]["total_trades"] == 2
+
+
+def test_analytics_summary_distinguishes_same_strategy_on_two_timeframes(tmp_path):
+    # Regression: deploying the same strategy twice (e.g. one on "minute",
+    # one on "15minute") must produce two distinguishable by_strategy rows
+    # — identical strategy_name, different deployment_id and timeframe.
+    app, container = build_test_app(tmp_path)
+    seeded_id = container.deployment_runtimes[0].deployment.id
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/deployments",
+            json=make_deployment_payload(strategy_name="orb_reversal", timeframe="15minute"),
+        )
+        assert created.status_code == 201
+        second_id = created.json()["id"]
+
+        body = client.get("/api/analytics/summary").json()
+
+    rows = {r["deployment_id"]: r for r in body["by_strategy"]}
+    assert rows[seeded_id]["strategy_name"] == "orb_reversal"
+    assert rows[seeded_id]["timeframe"] == "minute"
+    assert rows[second_id]["strategy_name"] == "orb_reversal"
+    assert rows[second_id]["timeframe"] == "15minute"
+
+
+def test_trades_deployment_id_filter_distinguishes_same_strategy_deployments(tmp_path):
+    app, container = build_test_app(tmp_path)
+    first_runtime = container.deployment_runtimes[0]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/deployments",
+            json=make_deployment_payload(strategy_name="orb_reversal", timeframe="15minute"),
+        )
+        second_id = created.json()["id"]
+        second_runtime = next(
+            rt for rt in container.deployment_runtimes if rt.deployment.id == second_id
+        )
+
+        first_runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
+        first_runtime.order_repository.close_position("RELIANCE", 245.0)
+        second_runtime.order_repository.open_position("RELIANCE", OrderSide.SELL, 250.0, 50)
+        second_runtime.order_repository.close_position("RELIANCE", 240.0)
+
+        trades = client.get(
+            "/api/trades", params={"deployment_id": second_id}
+        ).json()
+
+    assert len(trades) == 1
+    assert trades[0]["deployment_id"] == second_id
+    assert trades[0]["pnl"] == 500.0
 
 
 def test_analytics_summary_filters_by_symbol(tmp_path):
