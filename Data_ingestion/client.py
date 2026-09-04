@@ -101,11 +101,6 @@ class ZerodhaClient:
             Thread(target=httpd.shutdown, daemon=True).start()
             return "✅ Login successful! You can close this tab now."
 
-        # Open login page
-        login_url = self.kite.login_url()
-        print(f"🌐 Opening browser for login: {login_url}")
-        webbrowser.open(login_url)
-
         # Run a shutdown-able Flask server in the background. This listens
         # on the same port (5000) the main app will use later, so it MUST
         # be stopped (see callback() above) before this function returns —
@@ -114,6 +109,12 @@ class ZerodhaClient:
         server = Thread(target=httpd.serve_forever)
         server.daemon = True
         server.start()
+
+        # The callback listener must be ready before the browser opens. This
+        # avoids losing the redirect during the login flow.
+        login_url = self.kite.login_url()
+        print(f"🌐 Opening browser for login: {login_url}")
+        webbrowser.open(login_url)
 
         try:
             timeout = 60  # seconds

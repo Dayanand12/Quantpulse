@@ -30,6 +30,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 
 BACKTEST_PORT = 5050
 FRONTEND_DIR = "frontend"
@@ -90,40 +91,63 @@ def main() -> None:
     print(f"\nStarting backtest API on port {BACKTEST_PORT} ...", flush=True)
     backtest = subprocess.Popen([sys.executable, "run_backtest_server.py"])
 
-    print("Starting frontend dev server...", flush=True)
-    frontend = subprocess.Popen(
-        [NPM_CMD, "run", "dev"],
-        cwd=FRONTEND_DIR,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    found_port: list = []
-    threading.Thread(target=_relay_and_watch_for_port, args=(frontend, found_port), daemon=True).start()
-
     if not _wait_for_http(f"http://127.0.0.1:{BACKTEST_PORT}/api/backtest/watchlist"):
         print("Backtest API didn't come up in time — check the output above.", file=sys.stderr, flush=True)
 
-    deadline = time.time() + 30
-    while not found_port and time.time() < deadline:
-        time.sleep(0.5)
-
-    if found_port:
-        print(f"\nFrontend: http://localhost:{found_port[0]}/  (Backtest tab lives at /backtest)\n", flush=True)
-    else:
-        print("Frontend didn't announce its port in time — open it manually once it's ready.", file=sys.stderr, flush=True)
-
     print("Starting live paper-trading app on port 5000 (this may trigger a Zerodha login if needed)...\n", flush=True)
 
+    frontend = None
+    live_error = []
+
+    def start_live() -> None:
+        try:
+            import run_live
+            run_live.main()
+        except BaseException as exc:
+            live_error.append(exc)
+
+    live_thread = threading.Thread(target=start_live, daemon=True)
+    live_thread.start()
+
     try:
-        import run_live
-        run_live.main()  # blocks until Ctrl+C
+        # Authentication happens inside run_live.main(). Only start and open
+        # the frontend after the authenticated API is ready, so the user sees
+        # the Zerodha tab first and QuantPulse second.
+        if not _wait_for_http("http://127.0.0.1:5000/api/health", timeout=120):
+            if live_error:
+                raise live_error[0]
+            raise TimeoutError("Live app did not become ready after login.")
+
+        print("Starting frontend dev server...", flush=True)
+        frontend = subprocess.Popen(
+            [NPM_CMD, "run", "dev"],
+            cwd=FRONTEND_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        found_port: list = []
+        threading.Thread(target=_relay_and_watch_for_port, args=(frontend, found_port), daemon=True).start()
+
+        deadline = time.time() + 30
+        while not found_port and time.time() < deadline:
+            time.sleep(0.5)
+
+        if found_port:
+            frontend_url = f"http://localhost:{found_port[0]}/"
+            print(f"\nFrontend: {frontend_url} (Backtest tab lives at /backtest)\n", flush=True)
+            webbrowser.open(frontend_url)
+        else:
+            print("Frontend didn't announce its port in time — open it manually once it's ready.", file=sys.stderr, flush=True)
+
+        live_thread.join()  # blocks until Ctrl+C or the live app exits
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
         backtest.terminate()
-        _kill_process_tree(frontend)
+        if frontend is not None:
+            _kill_process_tree(frontend)
         try:
             backtest.wait(timeout=5)
         except subprocess.TimeoutExpired:
