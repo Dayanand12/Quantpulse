@@ -25,10 +25,12 @@ class ZerodhaClient:
         self.api_secret = api_secret or os.getenv("API_SECRET")
         self.access_token = access_token or os.getenv("ACCESS_TOKEN")
         self.exchange = exchange
+        self.redirect_url = os.getenv("REDIRECT_URL", "http://127.0.0.1:5000/callback")
 
         if not self.api_key or not self.api_secret:
             raise ValueError("❌ API_KEY and API_SECRET must be set in .env file")
 
+        self._validate_redirect_config()
         self.kite = KiteConnect(api_key=self.api_key)
 
         # Initialize market_data dict here
@@ -62,13 +64,29 @@ class ZerodhaClient:
             logging.warning("Saved ACCESS_TOKEN is expired/invalid — re-running login.")
             self.access_token = None
 
-        # If access_token not available, trigger login flow
+        # If access_token not available, trigger login flow once KiteConnect
+        # is fully initialized. Doing this earlier crashes before the browser
+        # can open, which is why the login tab appears to never launch.
         if not self.access_token:
             self.access_token = self._auto_generate_access_token()
 
         # ✅ Now that token is ready, set it in KiteConnect and create KiteTicker
         self.kite.set_access_token(self.access_token)
         self.kws = KiteTicker(self.api_key, self.access_token)
+
+    def _validate_redirect_config(self):
+        """Zerodha login requires the exact app callback URL configured in the
+        Kite developer console. This app listens on http://127.0.0.1:5000/callback.
+        The KiteConnect library itself does not support passing a redirect URI at
+        runtime, so this must match the developer-app setting or login fails."""
+        expected = "http://127.0.0.1:5000/callback"
+        if self.redirect_url != expected:
+            logging.warning(
+                "REDIRECT_URL=%s does not match the required callback URL %s. "
+                "Update the Kite app setting and .env to the exact value or login will fail.",
+                self.redirect_url,
+                expected,
+            )
 
 
     def _is_token_valid(self, access_token):

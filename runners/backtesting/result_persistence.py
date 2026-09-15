@@ -118,6 +118,7 @@ def save_backtest_result(
     date_to: dt.date,
     result: Dict[str, Any],
     strategy_params_json: Optional[str] = None,
+    option_action: str = "",
 ) -> BacktestResult:
     params = BacktestRunParams(
         strategy_name=strategy_name,
@@ -137,6 +138,7 @@ def save_backtest_result(
             strategy_params_json if strategy_params_json is not None
             else read_strategy_params_json(strategy_name)
         ),
+        option_action=option_action,
     )
     return result_repo.save_result(params, result)
 
@@ -152,6 +154,7 @@ def save_per_symbol_results(
     date_to: dt.date,
     capital: float,
     strategy_params_json: Optional[str] = None,
+    option_action: str = "",
 ) -> Dict[str, BacktestResult]:
     """Splits a multi-symbol run's trades by symbol and persists EACH
     symbol as its own stored result (symbols_id = that one symbol, not a
@@ -204,5 +207,6 @@ def save_per_symbol_results(
             date_to=date_to,
             result=result,
             strategy_params_json=strategy_params_json,
+            option_action=option_action,
         )
     return saved

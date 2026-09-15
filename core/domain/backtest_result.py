@@ -39,6 +39,14 @@ class BacktestRunParams:
     # an indicator threshold or condition creates a new stored row, same
     # as editing stoploss/target/etc already does.
     strategy_params_json: str = ""
+    # "BUY"/"SELL" when a run explicitly overrode the strategy's own trade
+    # direction (selling/writing an option instead of buying it — see
+    # runners/backtesting/engine.py's side_override) — "" for a run that
+    # never specified one (uses the strategy's own side, exactly like
+    # every run before this field existed). Part of the identity so a
+    # bought-CE result and a sold-CE result of otherwise-identical params
+    # never collide in dedup.
+    option_action: str = ""
 
 
 @dataclass(frozen=True)

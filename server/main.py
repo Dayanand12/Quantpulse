@@ -483,9 +483,13 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
         if timeframe not in ("daily", "weekly", "monthly"):
             raise ValidationError(f"Invalid timeframe: {timeframe}")
 
-        all_trades = container.trade_repository.list_trades()
-        available_strategies = sorted({t.strategy_name for t in all_trades if t.strategy_name})
-        available_symbols = sorted({t.symbol for t in all_trades})
+        # DB-level DISTINCT, not a full list_trades() fetch — this only
+        # needs to populate the filter dropdowns, and a full unfiltered
+        # trade fetch here would grow with total trade count across every
+        # strategy (the one query in this file that didn't filter by
+        # strategy first — see SqlTradeRepository.list_distinct_*).
+        available_strategies = container.trade_repository.list_distinct_strategies()
+        available_symbols = container.trade_repository.list_distinct_symbols()
 
         trades = container.trade_repository.list_trades(
             TradeFilter(

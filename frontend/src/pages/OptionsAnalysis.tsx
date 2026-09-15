@@ -310,6 +310,7 @@ export function OptionsAnalysis() {
                 <th className="py-1.5 pr-3">Underlying</th>
                 <th className="py-1.5 pr-3">Strike</th>
                 <th className="py-1.5 pr-3">Side</th>
+                <th className="py-1.5 pr-3">Action</th>
                 <th className="py-1.5 pr-3">Expiry</th>
                 <th className="py-1.5 pr-3 text-right">Trades</th>
                 <th className="py-1.5 pr-3 text-right">Win Rate</th>
@@ -330,6 +331,7 @@ export function OptionsAnalysis() {
                   <td className="py-1.5 pr-3">{r.option_underlying}</td>
                   <td className="py-1.5 pr-3">{r.option_strike}</td>
                   <td className="py-1.5 pr-3">{r.option_side}</td>
+                  <td className="py-1.5 pr-3">{r.option_action}</td>
                   <td className="py-1.5 pr-3 text-xs text-[var(--ink-muted)]">{r.option_expiry}</td>
                   <td className="py-1.5 pr-3 text-right">{r.total_trades}</td>
                   <td className="py-1.5 pr-3 text-right">{fmtPercent(r.win_rate)}</td>

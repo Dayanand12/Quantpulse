@@ -53,6 +53,12 @@ export interface BacktestRunConfig {
   // (as much history as the CSV has).
   date_from: string
   date_to: string
+  // undefined (default) -> use the strategy's own side, exactly like
+  // every run before this field existed. "BUY"/"SELL" overrides it — the
+  // only way to sell/write an option contract instead of buying it (see
+  // OptionsBacktestForm.tsx's Action toggle; unused on the equity
+  // Backtest page).
+  action?: "BUY" | "SELL"
 }
 
 export interface BacktestRunResult {
@@ -113,6 +119,9 @@ export interface RollingAtmRequest {
   charges: boolean
   date_from?: string
   date_to?: string
+  // undefined (default) -> buy every rolled contract (the strategy's own
+  // side). "BUY"/"SELL" overrides it — see BacktestRunConfig.action.
+  action?: "BUY" | "SELL"
 }
 
 // One option contract's identity + the exact `symbol` string backtest_
@@ -183,6 +192,10 @@ export interface ChainSweepRequest {
   charges: boolean
   date_from?: string
   date_to?: string
+  // undefined (default) -> buy every contract in the sweep (the
+  // strategy's own side). "BUY"/"SELL" applies to every contract swept —
+  // see BacktestRunConfig.action.
+  action?: "BUY" | "SELL"
 }
 
 export const DEFAULT_BACKTEST_CONFIG: BacktestRunConfig = {
@@ -232,6 +245,10 @@ export interface BacktestResultSummary {
   // core/domain/strategy_conditions.py) — "" for a strategy not migrated
   // to condition-JSON yet.
   strategy_params_json: string
+  // "BUY" (also the default for every row stored before this field
+  // existed) or "SELL" (this run explicitly sold/wrote the option instead
+  // of buying it) — see backtest_server.py::_result_summary.
+  option_action: "BUY" | "SELL"
   total_trades: number
   win_rate: number | null
   profit_factor: number | null

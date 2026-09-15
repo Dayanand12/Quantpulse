@@ -13,6 +13,11 @@ interface OptionsBacktestPageState {
   // contract, and picking a new contract doesn't require re-entering risk
   // settings.
   contractSymbol: string
+  // BUY (default, matches every run before this existed) or SELL — sells/
+  // writes the picked contract instead of buying it. Kept alongside
+  // contractSymbol (not inside config) for the same reason: it's a
+  // property of the leg being traded, not a risk/sizing setting.
+  optionAction: "BUY" | "SELL"
   result: BacktestRunResult | null
   running: boolean
   error: string | null
@@ -22,6 +27,7 @@ interface OptionsBacktestPageState {
   sweepId: number | null
   setConfig: (config: BacktestRunConfig) => void
   setContractSymbol: (symbol: string) => void
+  setOptionAction: (action: "BUY" | "SELL") => void
   setResult: (result: BacktestRunResult | null) => void
   setRunning: (running: boolean) => void
   setError: (error: string | null) => void
@@ -31,12 +37,14 @@ interface OptionsBacktestPageState {
 export const useOptionsBacktestPageStore = create<OptionsBacktestPageState>((set) => ({
   config: DEFAULT_BACKTEST_CONFIG,
   contractSymbol: "",
+  optionAction: "BUY",
   result: null,
   running: false,
   error: null,
   sweepId: null,
   setConfig: (config) => set({ config }),
   setContractSymbol: (contractSymbol) => set({ contractSymbol }),
+  setOptionAction: (optionAction) => set({ optionAction }),
   setResult: (result) => set({ result }),
   setRunning: (running) => set({ running }),
   setError: (error) => set({ error }),

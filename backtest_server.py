@@ -21,7 +21,7 @@ import threading
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +36,7 @@ from core.domain.backtest_result import BacktestResult
 from core.domain.batch_job import BatchJob
 from core.domain.chain_sweep import ChainSweep, ChainSweepContract
 from core.domain.charges import ChargeConfig, options_charge_config
+from core.domain.enums import OrderSide
 from core.domain.metrics import compute_performance_metrics, equity_curve
 from core.domain.models import OptionContract, StrategyConfig, Trade
 from core.exceptions import ValidationError, register_exception_handlers
@@ -147,6 +148,11 @@ class BacktestRunRequest(BaseModel):
     # FULL series regardless — see engine.run_backtest's docstring.
     date_from: Optional[str] = None
     date_to: Optional[str] = None
+    # None (default) -> use the strategy's own side, exactly like every
+    # request before this field existed. "BUY"/"SELL" overrides it — the
+    # only way to sell/write an option contract instead of buying it (see
+    # engine.run_backtest's side_override).
+    action: Optional[Literal["BUY", "SELL"]] = None
 
 
 class BatchPanelRequest(BaseModel):
@@ -212,6 +218,10 @@ class ChainSweepRequest(BaseModel):
     charges: bool = True
     date_from: Optional[str] = None
     date_to: Optional[str] = None
+    # None (default) -> buy every contract in the sweep (the strategy's own
+    # side). "BUY"/"SELL" applies to every contract swept — see
+    # BacktestRunRequest.action.
+    action: Optional[Literal["BUY", "SELL"]] = None
 
 
 class RollingAtmRequest(BaseModel):
@@ -239,6 +249,9 @@ class RollingAtmRequest(BaseModel):
     charges: bool = True
     date_from: Optional[str] = None
     date_to: Optional[str] = None
+    # None (default) -> buy every rolled contract (the strategy's own
+    # side). "BUY"/"SELL" overrides it — see BacktestRunRequest.action.
+    action: Optional[Literal["BUY", "SELL"]] = None
 
 
 def _parse_date(value: Optional[str]) -> Optional[dt.date]:
@@ -286,6 +299,11 @@ def _result_summary(r: BacktestResult) -> dict:
         # Analysis tab show/compare which indicator thresholds a given
         # stored run actually used, not just its risk/sizing settings.
         "strategy_params_json": p.strategy_params_json,
+        # "BUY" for "" (every run before this field existed, or one that
+        # never overrode the strategy's own side) as well as an explicit
+        # "BUY" override — both actually traded the contract long, so both
+        # should display the same way.
+        "option_action": p.option_action or "BUY",
         "total_trades": m.get("total_trades", 0),
         "win_rate": m.get("win_rate"),
         "profit_factor": m.get("profit_factor"),
@@ -602,6 +620,7 @@ def create_app() -> FastAPI:
                 strategy, symbol, df, config, charge_config=charge_config,
                 date_from=requested_date_from, date_to=requested_date_to,
                 extra_indicators=extra_indicators,
+                side_override=OrderSide(body.action) if body.action else None,
             )
             all_trades.extend(trades)
             symbols_used.append(symbol)
@@ -650,6 +669,7 @@ def create_app() -> FastAPI:
             date_from=requested_date_from or data_min_date,
             date_to=requested_date_to or data_max_date,
             capital=body.capital,
+            option_action=body.action or "",
         )
         response["saved_result_ids"] = {symbol: result.id for symbol, result in saved.items()}
 
@@ -936,6 +956,7 @@ def create_app() -> FastAPI:
             "charges": body.charges,
             "date_from": body.date_from,
             "date_to": body.date_to,
+            "action": body.action,
         }
         sweep = ChainSweep(
             strategy_name=body.strategy,
@@ -1000,6 +1021,7 @@ def create_app() -> FastAPI:
                 strategy_cls, body.underlying, body.category, body.side, config,
                 get_settings().historical_data_dir, charge_config=charge_config,
                 date_from=requested_date_from, date_to=requested_date_to, extra_indicators=extra_indicators,
+                action=body.action or "",
             )
         except FileNotFoundError as e:
             raise ValidationError(f"No spot/underlying data for {body.underlying!r}: {e}")
@@ -1010,7 +1032,10 @@ def create_app() -> FastAPI:
                 f"No contracts found for {body.underlying!r} {body.side} across any expiry."
             )
 
-        symbol = f"{body.underlying.upper()}:ROLLING_ATM_{body.side}"
+        # Action folded into the label so a BUY roll and a SELL roll of the
+        # same underlying/side don't collide under one synthetic symbol
+        # (and dedup separately, matching option_action below).
+        symbol = f"{body.underlying.upper()}:ROLLING_ATM_{body.side}_{body.action or 'BUY'}"
         data_min_date = min(dt.date.fromisoformat(r.expiry) for r in rolled_expiries)
         data_max_date = max(dt.date.fromisoformat(r.expiry) for r in rolled_expiries)
         effective_date_from = requested_date_from or data_min_date
@@ -1059,6 +1084,7 @@ def create_app() -> FastAPI:
             date_from=effective_date_from,
             date_to=effective_date_to,
             result={**response, "capital": body.capital},
+            option_action=body.action or "",
         )
         response["saved_result_ids"] = {symbol: saved.id}
 

@@ -36,6 +36,8 @@ export function ChainSweepPanel({ config, sweepId, onSweepIdChange }: ChainSweep
   const [selectedUnderlying, setSelectedUnderlying] = useState<OptionUnderlying | null>(null)
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState<string>("") // "" = every expiry
+  // Applies to every contract in the sweep — buy (default) or sell/write.
+  const [action, setAction] = useState<"BUY" | "SELL">("BUY")
 
   const [sweep, setSweep] = useState<ChainSweep | null>(null)
   const [starting, setStarting] = useState(false)
@@ -123,6 +125,7 @@ export function ChainSweepPanel({ config, sweepId, onSweepIdChange }: ChainSweep
         charges: config.charges,
         date_from: config.date_from || undefined,
         date_to: config.date_to || undefined,
+        action,
       })
       setSweep(created)
       onSweepIdChange(created.id)
@@ -142,7 +145,7 @@ export function ChainSweepPanel({ config, sweepId, onSweepIdChange }: ChainSweep
         to navigate away, come back and it'll still be here.
       </p>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <label>
           <span className={labelClass}>Underlying</span>
           <input
@@ -181,6 +184,27 @@ export function ChainSweepPanel({ config, sweepId, onSweepIdChange }: ChainSweep
               </option>
             ))}
           </select>
+        </label>
+
+        <label>
+          <span className={labelClass}>Action</span>
+          <div className="flex gap-1.5">
+            {(["BUY", "SELL"] as const).map((a) => (
+              <button
+                key={a}
+                type="button"
+                onClick={() => setAction(a)}
+                disabled={!!sweep && sweep.status !== "done" && sweep.status !== "failed"}
+                className={`flex-1 rounded-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                  action === a
+                    ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                    : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--ink-secondary)]"
+                }`}
+              >
+                {a}
+              </button>
+            ))}
+          </div>
         </label>
 
         <div className="flex items-end">

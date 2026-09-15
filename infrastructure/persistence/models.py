@@ -142,7 +142,7 @@ class BacktestResultRecord(Base):
             "strategy_name", "symbols", "timeframe", "date_from", "date_to",
             "quantity", "stoploss_pct", "target_pct", "trailing_pct",
             "max_cycles_per_day", "start_time", "end_time", "charges_enabled",
-            "strategy_params_json",
+            "strategy_params_json", "option_action",
             name="uq_backtest_results_identity",
         ),
     )
@@ -167,6 +167,13 @@ class BacktestResultRecord(Base):
     # indicator threshold/condition is a genuinely different test, same as
     # editing stoploss/target already is.
     strategy_params_json: Mapped[str] = mapped_column(Text, default="")
+    # "BUY"/"SELL" when this run explicitly overrode the strategy's own
+    # trade direction (selling/writing an option instead of buying it) —
+    # "" for a run that never specified one. Part of the identity, same
+    # reasoning as strategy_params_json above: a bought-CE run and a
+    # sold-CE run of otherwise-identical params are genuinely different
+    # tests and must never collide/overwrite each other.
+    option_action: Mapped[str] = mapped_column(Text, default="")
     result_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)

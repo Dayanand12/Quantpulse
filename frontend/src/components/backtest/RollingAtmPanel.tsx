@@ -30,6 +30,10 @@ export function RollingAtmPanel({ config }: RollingAtmPanelProps) {
   const [underlyingFilter, setUnderlyingFilter] = useState("")
   const [selectedUnderlying, setSelectedUnderlying] = useState<OptionUnderlying | null>(null)
   const [side, setSide] = useState<"CE" | "PE">("CE")
+  // Trade direction on the rolled contract — buy (default) or sell/write.
+  // Deliberately a separate toggle from `side` (CE/PE), which picks the
+  // option right, not the direction traded on it.
+  const [action, setAction] = useState<"BUY" | "SELL">("BUY")
 
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,6 +71,7 @@ export function RollingAtmPanel({ config }: RollingAtmPanelProps) {
         charges: config.charges,
         date_from: config.date_from || undefined,
         date_to: config.date_to || undefined,
+        action,
       })
       setResult(res)
     } catch (e) {
@@ -128,7 +133,27 @@ export function RollingAtmPanel({ config }: RollingAtmPanelProps) {
           </div>
         </label>
 
-        <div className="col-span-2 flex items-end">
+        <label>
+          <span className={labelClass}>Action</span>
+          <div className="flex gap-1.5">
+            {(["BUY", "SELL"] as const).map((a) => (
+              <button
+                key={a}
+                type="button"
+                onClick={() => setAction(a)}
+                className={`flex-1 rounded-md border px-3 py-1.5 text-sm ${
+                  action === a
+                    ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                    : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--ink-secondary)]"
+                }`}
+              >
+                {a}
+              </button>
+            ))}
+          </div>
+        </label>
+
+        <div className="flex items-end">
           <button
             onClick={handleRun}
             disabled={running || !selectedUnderlying || !config.strategy}

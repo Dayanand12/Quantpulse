@@ -164,3 +164,38 @@ def test_save_per_symbol_results_upserts_on_rerun_not_duplicates(tmp_path):
 
     assert first["RELIANCE"].id == second["RELIANCE"].id
     assert len(repo.list_results("my_strategy")) == 1
+
+
+def test_save_per_symbol_results_option_action_defaults_to_empty_string(tmp_path):
+    # "" means "not specified, uses the strategy's own side" — every run
+    # before this field existed behaves identically to one that never
+    # passes option_action at all.
+    repo = make_result_repo(tmp_path)
+
+    saved = save_per_symbol_results(
+        repo, strategy_name="my_strategy", symbols_used=["RELIANCE"], all_trades=[make_trade()],
+        config=StrategyConfig(), charges_enabled=True,
+        date_from=dt.date(2025, 1, 1), date_to=dt.date(2025, 12, 31), capital=100_000,
+    )
+
+    assert saved["RELIANCE"].params.option_action == ""
+
+
+def test_save_per_symbol_results_buy_and_sell_option_action_never_collide(tmp_path):
+    # A bought-CE run and a sold-CE run of otherwise-identical params are
+    # genuinely different tests — dedup must keep both, never overwrite
+    # one with the other.
+    repo = make_result_repo(tmp_path)
+    kwargs = dict(
+        strategy_name="my_strategy", symbols_used=["RELIANCE"], all_trades=[make_trade()],
+        config=StrategyConfig(), charges_enabled=True,
+        date_from=dt.date(2025, 1, 1), date_to=dt.date(2025, 12, 31), capital=100_000,
+    )
+
+    bought = save_per_symbol_results(repo, option_action="BUY", **kwargs)
+    sold = save_per_symbol_results(repo, option_action="SELL", **kwargs)
+
+    assert bought["RELIANCE"].id != sold["RELIANCE"].id
+    assert len(repo.list_results("my_strategy")) == 2
+    actions = {r.params.option_action for r in repo.list_results("my_strategy")}
+    assert actions == {"BUY", "SELL"}

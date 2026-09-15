@@ -21,12 +21,14 @@ import { useOptionsBacktestPageStore } from "../store/optionsBacktestPageStore"
 export function OptionsBacktest() {
   const config = useOptionsBacktestPageStore((s) => s.config)
   const contractSymbol = useOptionsBacktestPageStore((s) => s.contractSymbol)
+  const optionAction = useOptionsBacktestPageStore((s) => s.optionAction)
   const result = useOptionsBacktestPageStore((s) => s.result)
   const running = useOptionsBacktestPageStore((s) => s.running)
   const error = useOptionsBacktestPageStore((s) => s.error)
   const sweepId = useOptionsBacktestPageStore((s) => s.sweepId)
   const setConfig = useOptionsBacktestPageStore((s) => s.setConfig)
   const setContractSymbol = useOptionsBacktestPageStore((s) => s.setContractSymbol)
+  const setOptionAction = useOptionsBacktestPageStore((s) => s.setOptionAction)
   const setResult = useOptionsBacktestPageStore((s) => s.setResult)
   const setRunning = useOptionsBacktestPageStore((s) => s.setRunning)
   const setError = useOptionsBacktestPageStore((s) => s.setError)
@@ -37,7 +39,7 @@ export function OptionsBacktest() {
     setRunning(true)
     setError(null)
     try {
-      const res = await backtestApi.run({ ...config, symbols: [contractSymbol] })
+      const res = await backtestApi.run({ ...config, symbols: [contractSymbol], action: optionAction })
       setResult(res)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Backtest failed.")
@@ -61,8 +63,10 @@ export function OptionsBacktest() {
       <OptionsBacktestForm
         config={config}
         contractSymbol={contractSymbol}
+        optionAction={optionAction}
         onChangeConfig={setConfig}
         onChangeContract={setContractSymbol}
+        onChangeOptionAction={setOptionAction}
         onRun={runBacktest}
         running={running}
       />

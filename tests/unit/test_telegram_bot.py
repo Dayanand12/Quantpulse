@@ -872,6 +872,84 @@ def test_live_callback_summarizes_running_deployments(tmp_path, monkeypatch):
     assert "orb_reversal" not in text  # not running -> not listed
 
 
+def _fake_market_get(monkeypatch, *, feed_stale=False, nifty=None, banknifty=None):
+    import runners.backtesting.telegram_bot as telegram_bot_module
+
+    class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def _get(url, params=None, timeout=5):
+        if url.endswith("/api/health"):
+            return _FakeResponse({"feed_stale": feed_stale})
+        symbol = (params or {}).get("symbol")
+        if symbol == "NIFTY 50":
+            return _FakeResponse(nifty or {"symbol": "NIFTY 50", "error": "no data"})
+        if symbol == "NIFTY BANK":
+            return _FakeResponse(banknifty or {"symbol": "NIFTY BANK", "error": "no data"})
+        raise AssertionError(f"unexpected market-status request: {url} {params}")
+
+    monkeypatch.setattr(telegram_bot_module.requests, "get", _get)
+
+
+def test_market_command_reports_both_index_reads(tmp_path, monkeypatch):
+    job_repo, result_repo = _repos(tmp_path)
+    _fake_market_get(
+        monkeypatch,
+        nifty={
+            "symbol": "NIFTY 50", "ltp": 24150.25, "rsi": 61.2, "adx": 27.4,
+            "regime": "Bullish Trend", "trend_strength": "Strong",
+            "decision": "BUY NORMAL SIZE", "as_of": "2026-08-31 14:23:00",
+        },
+        banknifty={
+            "symbol": "NIFTY BANK", "ltp": 51890.0, "rsi": 48.0, "adx": 15.1,
+            "regime": "Range", "trend_strength": "Weak", "decision": "NO TRADE",
+            "as_of": "2026-08-31 14:23:00",
+        },
+    )
+
+    client = FakeTelegramClient()
+    handle_update(_update(_text_message("/market")), client, ALLOWED_USER_ID, job_repo, result_repo, {})
+
+    assert len(client.messages) == 1
+    text = client.messages[0][1]
+    assert "Bot online" in text
+    assert "NIFTY 50" in text and "NIFTY BANK" in text
+    assert "BUY NORMAL SIZE" in text and "NO TRADE" in text
+    assert "Feed: live" in text
+
+
+def test_market_command_when_live_app_unreachable_still_confirms_bot(tmp_path, monkeypatch):
+    job_repo, result_repo = _repos(tmp_path)
+    import runners.backtesting.telegram_bot as telegram_bot_module
+
+    def _raise(*args, **kwargs):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(telegram_bot_module.requests, "get", _raise)
+
+    client = FakeTelegramClient()
+    handle_update(_update(_text_message("market")), client, ALLOWED_USER_ID, job_repo, result_repo, {})
+
+    assert len(client.messages) == 1
+    text = client.messages[0][1]
+    assert "Bot online" in text  # the poller answering proves the bot is connected
+    assert "Can't reach the live app" in text
+
+
+def test_market_menu_button_triggers_status(tmp_path, monkeypatch):
+    job_repo, result_repo = _repos(tmp_path)
+    _fake_market_get(monkeypatch)
+
+    client = FakeTelegramClient()
+    handle_update(_callback_query_update("market"), client, ALLOWED_USER_ID, job_repo, result_repo, {})
+
+    assert any("Bot online" in text for _, text in client.messages)
+
+
 def test_restart_callback_refuses_when_a_batch_job_is_running(tmp_path):
     job_repo, result_repo = _repos(tmp_path)
     job_repo.create(BatchJob(

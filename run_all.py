@@ -110,13 +110,32 @@ def main() -> None:
     live_thread.start()
 
     try:
-        # Authentication happens inside run_live.main(). Only start and open
-        # the frontend after the authenticated API is ready, so the user sees
-        # the Zerodha tab first and QuantPulse second.
-        if not _wait_for_http("http://127.0.0.1:5000/api/health", timeout=120):
+        # Authentication happens inside run_live.main(), on the start_live
+        # thread. Wait for the authenticated API to answer /api/health before
+        # starting the frontend, so the Zerodha tab shows first and
+        # QuantPulse second.
+        #
+        # On the first run of the day this legitimately takes minutes: a
+        # human completing the Zerodha login, then a ~1-minute historical
+        # candle backfill for the whole watchlist, before uvicorn ever binds
+        # port 5000. The old flat 120s budget expired mid-backfill and
+        # run_all.py exited with a TimeoutError even though the login had
+        # succeeded — killing the live app seconds before it was ready.
+        # Budget 10 minutes now, but bail the instant run_live.main() raises
+        # (bad login, migration error, ...) rather than waiting it all out.
+        ready = False
+        deadline = time.time() + 600
+        while time.time() < deadline:
             if live_error:
                 raise live_error[0]
-            raise TimeoutError("Live app did not become ready after login.")
+            if _wait_for_http("http://127.0.0.1:5000/api/health", timeout=2):
+                ready = True
+                break
+            time.sleep(1)
+        if not ready:
+            if live_error:
+                raise live_error[0]
+            raise TimeoutError("Live app did not become ready after login (waited 10 min).")
 
         print("Starting frontend dev server...", flush=True)
         frontend = subprocess.Popen(

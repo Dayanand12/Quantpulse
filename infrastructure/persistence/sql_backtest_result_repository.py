@@ -47,6 +47,7 @@ def _record_to_result(record: BacktestResultRecord) -> BacktestResult:
         end_time=record.end_time,
         charges_enabled=record.charges_enabled,
         strategy_params_json=record.strategy_params_json,
+        option_action=record.option_action,
     )
     return BacktestResult(
         id=record.id,
@@ -78,6 +79,7 @@ class SqlBacktestResultRepository(IBacktestResultRepository):
                     BacktestResultRecord.end_time == params.end_time,
                     BacktestResultRecord.charges_enabled == params.charges_enabled,
                     BacktestResultRecord.strategy_params_json == params.strategy_params_json,
+                    BacktestResultRecord.option_action == params.option_action,
                 )
             ).scalar_one_or_none()
 
@@ -113,6 +115,7 @@ class SqlBacktestResultRepository(IBacktestResultRepository):
                     end_time=params.end_time,
                     charges_enabled=params.charges_enabled,
                     strategy_params_json=params.strategy_params_json,
+                    option_action=params.option_action,
                     result_json=result_json,
                     created_at=now,
                     updated_at=now,

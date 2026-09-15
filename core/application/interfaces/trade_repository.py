@@ -31,3 +31,16 @@ class ITradeRepository(ABC):
     @abstractmethod
     def list_trades(self, filters: Optional[TradeFilter] = None) -> List[Trade]:
         """Every closed trade matching filters, ordered by closed_at."""
+
+    @abstractmethod
+    def list_distinct_strategies(self) -> List[str]:
+        """Every strategy_name that has at least one closed trade, sorted.
+        A DB-level DISTINCT, not list_trades() filtered in Python — matters
+        once the trades table spans many strategies/thousands of rows (see
+        server/main.py::analytics_summary, the only caller — it needs this
+        purely to populate a filter dropdown, not the trades themselves)."""
+
+    @abstractmethod
+    def list_distinct_symbols(self) -> List[str]:
+        """Every symbol that has at least one closed trade, sorted. Same
+        DB-level-DISTINCT rationale as list_distinct_strategies()."""

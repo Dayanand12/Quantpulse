@@ -26,6 +26,7 @@ import polars as pl
 
 from core.application.interfaces.strategy import IStrategy
 from core.domain.charges import ChargeConfig
+from core.domain.enums import OrderSide
 from core.domain.models import OptionContract, StrategyConfig, Trade
 from runners.backtesting.engine import run_backtest
 from runners.backtesting.historical_loader import (
@@ -81,6 +82,7 @@ def run_rolling_atm_backtest(
     date_from: Optional[dt.date] = None,
     date_to: Optional[dt.date] = None,
     extra_indicators: Optional[list] = None,
+    action: str = "",
 ) -> Tuple[List[Trade], List[RollEvent]]:
     """Held-to-expiry rolling ATM backtest for one underlying+side. Returns
     (all trades across every period concatenated in time order, a log of
@@ -88,7 +90,13 @@ def run_rolling_atm_backtest(
     what makes this auditable instead of a black box: every strike choice
     traces back to a real spot price observed at a real prior date, never
     the contract's own future performance.
+
+    `side` is the option right (CE/PE) being rolled; `action` ("BUY"/
+    "SELL", "" = the strategy's own side) is the trade direction on that
+    contract — deliberately a separate parameter so the two never get
+    confused, see engine.py's side_override.
     """
+    side_override: Optional[OrderSide] = OrderSide(action) if action else None
     # Spot is plain equity/index OHLCV, not an option file — load_equity_csv
     # directly (load_backtest_csv would reach the same place via its
     # oi-column auto-detect, but this is unambiguous and skips the header
@@ -157,6 +165,7 @@ def run_rolling_atm_backtest(
         trades = run_backtest(
             strategy_instance, contract.symbol, df, config, charge_config=charge_config,
             date_from=date_from, date_to=date_to, extra_indicators=extra_indicators,
+            side_override=side_override,
         )
         all_trades.extend(trades)
         roll_log.append(RollEvent(expiry.isoformat(), contract.symbol, contract.strike, spot_at_roll))

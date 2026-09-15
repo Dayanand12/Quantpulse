@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
 
+import Data_ingestion.client as client_module
 from Data_ingestion.client import ZerodhaClient
 
 
@@ -87,3 +88,40 @@ def test_instruments_are_only_fetched_once_per_exchange():
     # of re-fetching Kite's full instrument dump every time.
     exchange_calls = [c for c in client.kite.instruments.call_args_list if c.args == ("NSE",)]
     assert len(exchange_calls) == 1
+
+
+def test_init_generates_token_only_after_kite_is_initialized(monkeypatch):
+    events = []
+
+    class FakeKiteConnect:
+        def __init__(self, api_key):
+            events.append(("kite_init", api_key))
+            self.api_key = api_key
+
+        def set_access_token(self, token):
+            events.append(("set_token", token))
+
+    class FakeKiteTicker:
+        def __init__(self, api_key, access_token):
+            events.append(("ticker_init", api_key, access_token))
+
+    def fake_getenv(key, default=None):
+        values = {
+            "API_KEY": "demo-key",
+            "API_SECRET": "demo-secret",
+            "REDIRECT_URL": "http://127.0.0.1:5000/callback",
+            "ACCESS_TOKEN": None,
+        }
+        return values.get(key, default)
+
+    monkeypatch.setattr(client_module, "os", type("OsStub", (), {"getenv": staticmethod(fake_getenv)})())
+    monkeypatch.setattr(client_module, "KiteConnect", FakeKiteConnect)
+    monkeypatch.setattr(client_module, "KiteTicker", FakeKiteTicker)
+    monkeypatch.setattr(ZerodhaClient, "_is_token_valid", lambda self, access_token: False)
+    monkeypatch.setattr(ZerodhaClient, "_auto_generate_access_token", lambda self: "fresh-token")
+
+    client = ZerodhaClient()
+
+    assert client.access_token == "fresh-token"
+    assert events[0] == ("kite_init", "demo-key")
+    assert ("set_token", "fresh-token") in events

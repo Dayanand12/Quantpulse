@@ -27,8 +27,10 @@ const labelClass = "mb-1 block text-xs font-medium text-[var(--ink-secondary)]"
 interface OptionsBacktestFormProps {
   config: BacktestRunConfig
   contractSymbol: string
+  optionAction: "BUY" | "SELL"
   onChangeConfig: (config: BacktestRunConfig) => void
   onChangeContract: (symbol: string) => void
+  onChangeOptionAction: (action: "BUY" | "SELL") => void
   onRun: () => void
   running: boolean
 }
@@ -44,8 +46,10 @@ interface OptionsBacktestFormProps {
 export function OptionsBacktestForm({
   config,
   contractSymbol,
+  optionAction,
   onChangeConfig,
   onChangeContract,
+  onChangeOptionAction,
   onRun,
   running,
 }: OptionsBacktestFormProps) {
@@ -81,6 +85,26 @@ export function OptionsBacktestForm({
     <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] p-5 backdrop-blur-sm">
       <h2 className="mb-4 text-sm font-semibold text-[var(--ink-primary)]">Pick a Contract</h2>
       <OptionContractPicker value={contractSymbol} onChange={onChangeContract} />
+
+      <div className="mt-4">
+        <span className={labelClass}>Action</span>
+        <div className="flex gap-1.5" style={{ maxWidth: "16rem" }}>
+          {(["BUY", "SELL"] as const).map((a) => (
+            <button
+              key={a}
+              type="button"
+              onClick={() => onChangeOptionAction(a)}
+              className={`flex-1 rounded-md border px-3 py-1.5 text-sm ${
+                optionAction === a
+                  ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                  : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--ink-secondary)]"
+              }`}
+            >
+              {a === "BUY" ? "Buy" : "Sell / Write"}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="mt-5 border-t border-[var(--glass-border)] pt-4">
         <span className={labelClass}>Strategy</span>

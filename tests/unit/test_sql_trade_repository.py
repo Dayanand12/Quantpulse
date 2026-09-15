@@ -117,6 +117,24 @@ def test_date_range_excludes_trades_outside_market_hours_on_boundary_days(tmp_pa
     assert {t.closed_at.time() for t in trades} == {dt.time(9, 15), dt.time(15, 30)}
 
 
+def test_list_distinct_strategies_and_symbols_dedupe_and_sort(tmp_path):
+    session_factory, repo = make_repo(tmp_path)
+    add_trade(session_factory, strategy_name="ema_crossover", symbol="TCS")
+    add_trade(session_factory, strategy_name="ema_crossover", symbol="TCS")
+    add_trade(session_factory, strategy_name="orb_reversal", symbol="RELIANCE")
+
+    assert repo.list_distinct_strategies() == ["ema_crossover", "orb_reversal"]
+    assert repo.list_distinct_symbols() == ["RELIANCE", "TCS"]
+
+
+def test_list_distinct_strategies_excludes_null(tmp_path):
+    session_factory, repo = make_repo(tmp_path)
+    add_trade(session_factory, strategy_name=None)
+    add_trade(session_factory, strategy_name="orb_reversal")
+
+    assert repo.list_distinct_strategies() == ["orb_reversal"]
+
+
 def test_maps_all_fields_correctly(tmp_path):
     session_factory, repo = make_repo(tmp_path)
     add_trade(

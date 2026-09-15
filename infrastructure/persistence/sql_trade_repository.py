@@ -75,3 +75,18 @@ class SqlTradeRepository(ITradeRepository):
         with unit_of_work(self._session_factory) as session:
             records = session.scalars(stmt)
             return [record_to_trade(r) for r in records]
+
+    def list_distinct_strategies(self) -> List[str]:
+        stmt = (
+            select(TradeRecord.strategy_name)
+            .distinct()
+            .where(TradeRecord.strategy_name.is_not(None))
+            .order_by(TradeRecord.strategy_name)
+        )
+        with unit_of_work(self._session_factory) as session:
+            return list(session.scalars(stmt))
+
+    def list_distinct_symbols(self) -> List[str]:
+        stmt = select(TradeRecord.symbol).distinct().order_by(TradeRecord.symbol)
+        with unit_of_work(self._session_factory) as session:
+            return list(session.scalars(stmt))

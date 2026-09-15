@@ -29,6 +29,7 @@ core/domain/batch_job.py), so this only really matters for a Telegram
 upload that leaves them all blank.
 """
 
+import datetime as dt
 import json
 import logging
 import os
@@ -103,6 +104,14 @@ _RUN_COMMANDS = {"run"}
 # the same capabilities the text commands above already provide, plus
 # Live Status and Restart which have no text-command equivalent.
 _MENU_COMMANDS = {"menu", "start"}
+# "market" / "indices" / "nifty" / "banknifty" (bare or "/"-prefixed) ->
+# a live NIFTY 50 + NIFTY BANK read (index level, regime, BUY/SELL
+# verdict), pulled from the LIVE app's /api/market-analysis over
+# localhost — the same cross-process hop send_live_status() makes, since
+# this process has no Zerodha session of its own (see the module
+# docstring). Doubles as an "is this bot still connected?" ping: if it
+# answers at all, the Telegram poller is alive.
+_MARKET_COMMANDS = {"market", "indices", "nifty", "banknifty"}
 
 # The live paper-trading app (server/main.py) is a SEPARATE process/port
 # from this one (backtest_server.py) — deliberately, see this module's
@@ -110,6 +119,18 @@ _MENU_COMMANDS = {"menu", "start"}
 # "Live Status" reaches across to it the same way the frontend does, over
 # plain localhost HTTP, not by importing any of its wiring.
 _LIVE_APP_BASE = "http://127.0.0.1:5000"
+
+# The two indices the Market Analysis page pins as fixed "Today's Read"
+# cards (frontend/src/pages/MarketAnalysis.tsx WATCHED_INDICES) — same
+# symbol strings /api/market-analysis expects.
+_MARKET_STATUS_INDICES = ["NIFTY 50", "NIFTY BANK"]
+
+# NSE cash-market hours (IST), for the open/closed line only — a
+# wall-clock heuristic with no holiday calendar, same window
+# runners/paper_trading/feed_watchdog.py uses.
+_IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+_MARKET_OPEN_MINUTES = 9 * 60 + 15
+_MARKET_CLOSE_MINUTES = 15 * 60 + 30
 
 
 def _default_csv_path(symbol: str) -> str:
@@ -495,6 +516,7 @@ def _main_menu_keyboard() -> dict:
     return _kb([
         [("🧪 Run Backtest", "run")],
         [("📊 View Results", "res")],
+        [("📈 Market Status", "market")],
         [("🔴 Live Status", "live")],
         [("🔄 Restart Backtest Server", "restart")],
     ])
@@ -654,6 +676,75 @@ def send_results_summary(
     client.edit_message_text(chat_id, message_id, "\n".join(lines), _results_summary_keyboard(strategy_name))
 
 
+def _market_session_line() -> str:
+    """"Market: OPEN/CLOSED · <weekday date time> IST" — a wall-clock
+    check against NSE cash hours, NOT holiday-aware (no exchange calendar
+    here). It's a hint for reading the numbers below, not an
+    authoritative session state."""
+    now_ist = dt.datetime.now(_IST)
+    minutes = now_ist.hour * 60 + now_ist.minute
+    is_open = now_ist.weekday() < 5 and _MARKET_OPEN_MINUTES <= minutes <= _MARKET_CLOSE_MINUTES
+    return f"Market: {'OPEN 🟢' if is_open else 'CLOSED 🔴'} · {now_ist:%a %d %b %H:%M} IST"
+
+
+def _fmt_index_analysis(data: Dict[str, Any]) -> str:
+    """One /api/market-analysis payload -> a few compact lines. Same
+    fields the Market Analysis page's 'Today's Read' card shows (level,
+    regime + strength, RSI/ADX, the BUY/SELL verdict), plus the closed-
+    candle timestamp it was computed from."""
+    symbol = data.get("symbol", "?")
+    if data.get("error"):
+        return f"• {symbol}: {data['error']}"
+
+    def num(key: str, spec: str = "{:.0f}") -> str:
+        value = data.get(key)
+        return spec.format(value) if isinstance(value, (int, float)) else "—"
+
+    lines = [
+        f"• {symbol} — {num('ltp', '{:,.2f}')}",
+        f"  {data.get('regime', '?')} ({data.get('trend_strength', '?')}) · "
+        f"RSI {num('rsi')} · ADX {num('adx')}",
+        f"  Verdict: {data.get('decision', '?')}",
+    ]
+    if data.get("as_of"):
+        lines.append(f"  as of {data['as_of']}")
+    return "\n".join(lines)
+
+
+def send_market_status(chat_id: int, client: TelegramClient) -> None:
+    """"market" / "nifty" / "banknifty" — a live NIFTY 50 + NIFTY BANK
+    read pulled from the LIVE app's /api/market-analysis over localhost,
+    the same cross-process hop send_live_status() makes (this process has
+    no Zerodha session of its own — see the module docstring). Also the
+    simplest "is the bot still up?" check: a reply here at all means the
+    Telegram poller is alive."""
+    lines = [f"🤖 Bot online · {_market_session_line()}"]
+
+    try:
+        health = requests.get(f"{_LIVE_APP_BASE}/api/health", timeout=5).json()
+    except Exception:
+        lines.append(
+            "Can't reach the live app on port 5000 — is `python run_live.py` (or "
+            "run_all.py) running? The NIFTY / BANKNIFTY reads need it too."
+        )
+        client.send_message(chat_id, "\n".join(lines))
+        return
+
+    lines.append("Feed: " + ("STALE ⚠️" if health.get("feed_stale") else "live ✅"))
+
+    for symbol in _MARKET_STATUS_INDICES:
+        try:
+            data = requests.get(
+                f"{_LIVE_APP_BASE}/api/market-analysis", params={"symbol": symbol}, timeout=15
+            ).json()
+        except Exception as e:
+            lines.append(f"• {symbol}: request failed ({e})")
+            continue
+        lines.append(_fmt_index_analysis(data))
+
+    client.send_message(chat_id, "\n".join(lines))
+
+
 def send_live_status(chat_id: int, client: TelegramClient) -> None:
     """"Live Status" button — calls the LIVE app's own REST API (a
     separate process/port, server/main.py) over plain localhost HTTP, the
@@ -743,6 +834,8 @@ def handle_callback_query(
         client.edit_message_text(chat_id, message_id, "Pick a strategy to backtest:", _strategy_picker_keyboard("run"))
     elif data == "res":
         client.edit_message_text(chat_id, message_id, "Pick a strategy to view results for:", _strategy_picker_keyboard("res"))
+    elif data == "market":
+        send_market_status(chat_id, client)
     elif data == "live":
         send_live_status(chat_id, client)
     elif data == "restart":
@@ -846,6 +939,10 @@ def handle_update(
 
     if command in _MENU_COMMANDS:
         client.send_message(chat_id, "What do you want to do?", _main_menu_keyboard())
+        return
+
+    if command in _MARKET_COMMANDS:
+        send_market_status(chat_id, client)
         return
 
     if command in _LIST_STRATEGIES_COMMANDS:

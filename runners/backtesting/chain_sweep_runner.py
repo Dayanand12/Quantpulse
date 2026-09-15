@@ -36,6 +36,7 @@ from core.application.interfaces.strategy import IStrategy
 from core.domain.backtest_result import BacktestRunParams
 from core.domain.chain_sweep import ChainSweep, ChainSweepContract
 from core.domain.charges import ChargeConfig, options_charge_config
+from core.domain.enums import OrderSide
 from core.domain.indicator_registry import IndicatorSpec
 from core.domain.models import OptionContract, StrategyConfig, Trade
 from runners.backtesting.engine import run_backtest
@@ -73,13 +74,14 @@ def _run_one_contract(args: tuple) -> Tuple[str, List[Trade]]:
     docstring for why DB access has to stay in the main thread."""
     (
         strategy_cls, symbol, csv_path, config, charge_config,
-        date_from, date_to, extra_indicators,
+        date_from, date_to, extra_indicators, side_override,
     ) = args
     df = load_backtest_csv(csv_path)
     strategy = strategy_cls()
     trades = run_backtest(
         strategy, symbol, df, config, charge_config=charge_config,
         date_from=date_from, date_to=date_to, extra_indicators=extra_indicators,
+        side_override=side_override,
     )
     return symbol, trades
 
@@ -102,6 +104,11 @@ def run_chain_sweep(
         charge_config: Optional[ChargeConfig] = options_charge_config() if charges_enabled else None
         requested_date_from = _parse_date(settings.get("date_from"))
         requested_date_to = _parse_date(settings.get("date_to"))
+        # "" (buy, the strategy's own side) unless the sweep explicitly
+        # asked to sell/write every contract instead — see engine.py's
+        # side_override.
+        option_action = settings.get("action") or ""
+        side_override: Optional[OrderSide] = OrderSide(option_action) if option_action else None
         extra_indicators: List[IndicatorSpec] = required_dynamic_indicators(sweep.strategy_name)
         strategy_params_json = read_strategy_params_json(sweep.strategy_name)
         capital = settings.get("capital", 100_000)
@@ -154,6 +161,7 @@ def run_chain_sweep(
                 end_time=config.end_time,
                 charges_enabled=charges_enabled,
                 strategy_params_json=strategy_params_json,
+                option_action=option_action,
             )
             existing = existing_by_identity.get(candidate)
             if existing is not None:
@@ -190,6 +198,7 @@ def run_chain_sweep(
                 symbol: (
                     strategy_cls, symbol, csv_path, config, charge_config,
                     requested_date_from, requested_date_to, extra_indicators,
+                    side_override,
                 )
                 for symbol, csv_path, _, _ in to_run
             }
@@ -232,6 +241,7 @@ def run_chain_sweep(
                             date_to=effective_date_to,
                             capital=capital,
                             strategy_params_json=strategy_params_json,
+                            option_action=option_action,
                         )
                         result = saved[symbol]
                         metrics = result.result.get("metrics", {})

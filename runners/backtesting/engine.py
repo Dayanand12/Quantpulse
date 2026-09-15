@@ -144,10 +144,19 @@ def run_backtest(
     date_from: Optional[dt.date] = None,
     date_to: Optional[dt.date] = None,
     extra_indicators: Optional[List[IndicatorSpec]] = None,
+    side_override: Optional[OrderSide] = None,
 ) -> List[Trade]:
     """base_df: 1-minute OHLCV for `symbol` (runners/backtesting/
     historical_loader.load_equity_csv). Returns every closed trade, in the
     same core.domain.models.Trade shape live/paper trading produces.
+
+    side_override: trade BUY or SELL regardless of `strategy.side` — lets a
+    caller sell/write an option (or short an equity) with a strategy class
+    that was never itself written as a SELL strategy. None (the default)
+    preserves existing behavior: the strategy's own fixed `side` decides.
+    PnL/charges math in this function is already fully side-generic, so no
+    other change is needed to support this — see core/domain/charges.py's
+    sell-vs-buy-leg handling.
 
     date_from/date_to restrict which bars are replayed (e.g. "last 1
     year"), but indicators are still computed over the FULL base_df below
@@ -270,9 +279,10 @@ def run_backtest(
 
             if symbol in candidates:
                 ltp = row["ltp"]
-                levels = _entry_levels(strategy.side, ltp, config)
+                effective_side = side_override or strategy.side
+                levels = _entry_levels(effective_side, ltp, config)
                 state = _TradeState(
-                    side=strategy.side,
+                    side=effective_side,
                     entry_price=ltp,
                     quantity=config.quantity,
                     stop_loss=levels["stop_loss"],

@@ -104,7 +104,9 @@ Three ways to run a backtest, all converging on the same engine
    `save_backtest_result` dedups on). Same pipeline is reachable from the
    **Telegram bot** (`runners/backtesting/telegram_bot.py`) — send a file,
    get results back, no browser needed. Commands: `/strategies`,
-   `template <name>`, `results <name>`, `status <name>`.
+   `template <name>`, `results <name>`, `status <name>`, `market` (live
+   NIFTY 50 + NIFTY BANK read via the live app on :5000; also a bot
+   connectivity ping).
 
 Every stored `backtest_results` row is deduped on that same
 `BacktestRunParams` identity (strategy, symbols, dates, risk settings,
