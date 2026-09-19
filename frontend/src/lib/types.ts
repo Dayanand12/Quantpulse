@@ -74,6 +74,16 @@ export interface Trade {
   // models.py::Trade.market_condition) — the "why" behind a win or loss.
   market_condition: string | null
   entry_oi: number | null
+  // Structured regime dimensions (core/domain/regime_snapshot.py) — same
+  // entry moment as market_condition above, split into independently
+  // filterable columns instead of one composite string. Null wherever
+  // that dimension's inputs weren't available (e.g. INDIA VIX not on the
+  // watchlist) or for trades logged before these fields existed.
+  regime_trend: string | null
+  regime_volatility: string | null
+  index_trend: string | null
+  vix_bucket: string | null
+  session_phase: string | null
 }
 
 export interface BrokerStatus {
@@ -233,7 +243,15 @@ export type CandleTimeframe =
 export interface Deployment {
   id: string
   strategy_name: string
+  // Live-resolved every read: if watchlist_id is set, this is that
+  // watchlist's CURRENT membership (server/main.py::_deployment_to_dict),
+  // not a frozen snapshot — same list the live engine screens against.
   symbols: string[]
+  // Exactly one of symbols/watchlist_id is the real symbol source — see
+  // core/domain/models.py::Deployment's docstring. null = fixed symbols
+  // (classic mode); set = "trade whatever this watchlist currently
+  // contains," re-read live every cycle, no restart needed on edit.
+  watchlist_id: number | null
   capital: number
   quantity: number
   stoploss_pct: number
@@ -251,6 +269,7 @@ export interface Deployment {
 export interface DeploymentInput {
   strategy_name: string
   symbols: string[]
+  watchlist_id: number | null
   capital: number
   quantity: number
   stoploss_pct: number

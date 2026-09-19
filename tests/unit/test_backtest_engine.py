@@ -213,6 +213,23 @@ def test_no_charge_config_leaves_charges_none():
 import runners.backtesting.engine as engine_module
 
 
+def _fake_regime_lookup(nifty_df=None, vix_df=None, calls=None):
+    """_regime_snapshot_series is now called twice per run (NIFTY, then
+    VIX — see engine.py's _NIFTY_REGIME_COLUMNS/_VIX_REGIME_COLUMNS) with
+    the (symbol, columns, timeframe_minutes) signature — this dispatches
+    each call's fixture by symbol, same as the real function's per-symbol
+    CSV lookup would."""
+    def lookup(symbol, columns, timeframe_minutes):
+        if calls is not None:
+            calls.append(symbol)
+        if symbol == "NIFTY 50":
+            return nifty_df
+        if symbol == "INDIA VIX":
+            return vix_df
+        return None
+    return lookup
+
+
 def test_nifty_regime_fields_join_onto_the_snapshot_by_matching_date(monkeypatch):
     day = dt.date(2026, 1, 5)
     rows = _flat_warmup(day, _FIRST_TRADEABLE_INDEX + 2, 100.0)
@@ -227,7 +244,7 @@ def test_nifty_regime_fields_join_onto_the_snapshot_by_matching_date(monkeypatch
         for i in range(_FIRST_TRADEABLE_INDEX + 2)
     ]
     nifty_df = pl.DataFrame(nifty_rows).with_columns(pl.col("date").cast(pl.Datetime))
-    monkeypatch.setattr(engine_module, "_regime_snapshot_series", lambda timeframe_minutes: nifty_df)
+    monkeypatch.setattr(engine_module, "_regime_snapshot_series", _fake_regime_lookup(nifty_df=nifty_df))
 
     spy = _SnapshotSpyStrategy()
     run_backtest(spy, "TEST", df, config)
@@ -244,7 +261,7 @@ def test_nifty_regime_fields_are_none_when_nifty_data_unavailable(monkeypatch):
     df = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime))
     config = StrategyConfig()
 
-    monkeypatch.setattr(engine_module, "_regime_snapshot_series", lambda timeframe_minutes: None)
+    monkeypatch.setattr(engine_module, "_regime_snapshot_series", _fake_regime_lookup())
 
     spy = _SnapshotSpyStrategy()
     run_backtest(spy, "TEST", df, config)
@@ -262,15 +279,12 @@ def test_regime_lookup_is_skipped_when_backtesting_nifty_itself(monkeypatch):
     config = StrategyConfig()
 
     calls = []
-    monkeypatch.setattr(
-        engine_module, "_regime_snapshot_series",
-        lambda timeframe_minutes: calls.append(timeframe_minutes) or None,
-    )
+    monkeypatch.setattr(engine_module, "_regime_snapshot_series", _fake_regime_lookup(calls=calls))
 
     spy = _SnapshotSpyStrategy()
     run_backtest(spy, "NIFTY 50", df, config)
 
-    assert calls == []  # never looked itself up
+    assert calls == ["INDIA VIX"]  # never looked ITSELF up, but VIX is still independent
     assert all(snap["nifty_ema9"] is None for snap in spy.seen_snapshots)
 
 
@@ -288,7 +302,7 @@ def test_regime_fields_dont_affect_the_stocks_own_fields_when_nifty_coverage_has
         "date": dt.datetime.combine(day, dt.time(9, 15)),
         "nifty_ema9": 105.0, "nifty_ema21": 95.0, "nifty_adx": 40.0,
     }]).with_columns(pl.col("date").cast(pl.Datetime))
-    monkeypatch.setattr(engine_module, "_regime_snapshot_series", lambda timeframe_minutes: nifty_df)
+    monkeypatch.setattr(engine_module, "_regime_snapshot_series", _fake_regime_lookup(nifty_df=nifty_df))
 
     spy = _SnapshotSpyStrategy()
     run_backtest(spy, "TEST", df, config)
@@ -297,7 +311,7 @@ def test_regime_fields_dont_affect_the_stocks_own_fields_when_nifty_coverage_has
     assert all(snap["ema9"] is not None for snap in spy.seen_snapshots)
 
 
-def test_regime_snapshot_series_caches_by_timeframe_and_handles_a_missing_file(tmp_path, monkeypatch):
+def test_regime_snapshot_series_caches_by_symbol_and_timeframe_and_handles_a_missing_file(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.setattr(
@@ -305,8 +319,11 @@ def test_regime_snapshot_series_caches_by_timeframe_and_handles_a_missing_file(t
     )
     engine_module._regime_cache.clear()
     try:
-        result = engine_module._regime_snapshot_series(1)
+        result = engine_module._regime_snapshot_series(
+            "NIFTY 50", engine_module._NIFTY_REGIME_COLUMNS, 1
+        )
         assert result is None
-        assert 1 in engine_module._regime_cache  # "checked, missing" is itself cached
+        # "checked, missing" is itself cached, keyed by (symbol, timeframe)
+        assert ("NIFTY 50", 1) in engine_module._regime_cache
     finally:
         engine_module._regime_cache.clear()

@@ -43,7 +43,13 @@ def record_to_trade(record: TradeRecord) -> Trade:
         entry_atr_pct=record.entry_atr_pct,
         entry_vwap=record.entry_vwap,
         entry_volume_ratio=record.entry_volume_ratio,
+        entry_oi=record.entry_oi,
         market_condition=record.market_condition,
+        regime_trend=record.regime_trend,
+        regime_volatility=record.regime_volatility,
+        index_trend=record.index_trend,
+        vix_bucket=record.vix_bucket,
+        session_phase=record.session_phase,
         charges=record.charges,
         net_pnl=record.net_pnl,
     )

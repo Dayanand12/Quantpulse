@@ -16,11 +16,22 @@ core/container.py::DeploymentRuntime), each with its own order_repository
 """
 
 import datetime as dt
-from typing import List
+from typing import List, Optional
 
 from core.application.interfaces.order_repository import IOrderRepository
 from core.application.interfaces.strategy import IStrategy
+from core.application.interfaces.watchlist_repository import IWatchlistRepository
 from core.domain.enums import OrderSide
+
+# The two index symbols a trade's entry-time regime snapshot is enriched
+# with (core/domain/regime_snapshot.py) — same broader-market symbol
+# backtest's engine.py joins by timestamp (_REGIME_SYMBOL), plus INDIA VIX
+# for the vix_bucket dimension backtest doesn't have live. Both are
+# genuinely optional: absent from live_engine's snapshot (e.g. dropped
+# from every watchlist) just means those regime columns come back None on
+# the resulting Trade, same as any other missing indicator.
+_REGIME_INDEX_SYMBOL = "NIFTY 50"
+_REGIME_VIX_SYMBOL = "INDIA VIX"
 
 
 class ExecutionManager:
@@ -36,12 +47,20 @@ class ExecutionManager:
         trailing_pct=0.1,
         max_cycles_per_day=10,
         timeframe="minute",
+        watchlist_repository: Optional[IWatchlistRepository] = None,
+        watchlist_id: Optional[int] = None,
     ):
         self.live_engine = live_engine
         self.order_repository = order_repository
         self.strategy = strategy
         self.symbols = symbols
         self.side = strategy.side
+        # When set, watchlist_id takes over as the real symbol source —
+        # current_symbols() re-reads that watchlist fresh every cycle
+        # instead of using the frozen `symbols` list above. See
+        # core/domain/models.py::Deployment's docstring for why.
+        self.watchlist_repository = watchlist_repository
+        self.watchlist_id = watchlist_id
 
         self.quantity = quantity
         self.stoploss_pct = stoploss_pct
@@ -114,8 +133,38 @@ class ExecutionManager:
                 )
                 self.trade_state.pop(symbol, None)
 
+    def current_symbols(self) -> List[str]:
+        """The symbol list this cycle actually screens — a watchlist_id
+        binding always wins over the frozen `symbols` list when set, and
+        is re-read fresh every call (no caching), so a watchlist edit
+        takes effect on this deployment's very next 3-second cycle
+        (see runners/paper_trading/deployment_runner.py), live."""
+        if self.watchlist_id is not None and self.watchlist_repository is not None:
+            return self.watchlist_repository.get_symbols(self.watchlist_id)
+        return self.symbols
+
+    def _regime_context(self, snapshot) -> dict:
+        """NIFTY/VIX fields to merge onto an entry's own snapshot before
+        it's stored — a NEW dict each call (never mutates `snapshot`
+        in-place: its per-symbol entries are the SAME dict objects
+        live_engine.py's indicator_snapshot holds, reused every cycle, so
+        writing extra keys into one directly would permanently pollute
+        what the strategy sees on every later tick, not just this trade's
+        own frozen copy)."""
+        index_data = snapshot.get(_REGIME_INDEX_SYMBOL) or {}
+        vix_data = snapshot.get(_REGIME_VIX_SYMBOL) or {}
+        return {
+            "nifty_ltp": index_data.get("ltp"),
+            "nifty_ema9": index_data.get("ema9"),
+            "nifty_ema21": index_data.get("ema21"),
+            "nifty_adx": index_data.get("adx"),
+            "nifty_vwap": index_data.get("vwap"),
+            "nifty_atr_pct": index_data.get("atr_pct"),
+            "vix_ltp": vix_data.get("ltp"),
+        }
+
     def _manage_entries(self, snapshot):
-        candidates = self.strategy.screen(snapshot, self.symbols)
+        candidates = self.strategy.screen(snapshot, self.current_symbols())
 
         for symbol in candidates:
             if self.order_repository.get_open_position(symbol) is not None:
@@ -129,9 +178,10 @@ class ExecutionManager:
                 continue
 
             ltp = data["ltp"]
+            enriched_snapshot = {**data, **self._regime_context(snapshot)}
 
             entered = self.order_repository.open_position(
-                symbol, self.side, ltp, self.quantity, market_snapshot=data
+                symbol, self.side, ltp, self.quantity, market_snapshot=enriched_snapshot
             )
 
             if entered:

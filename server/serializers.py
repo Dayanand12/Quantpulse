@@ -38,6 +38,11 @@ def trade_to_dict(trade: Trade) -> dict:
         "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
         "market_condition": trade.market_condition,
         "entry_oi": trade.entry_oi,
+        "regime_trend": trade.regime_trend,
+        "regime_volatility": trade.regime_volatility,
+        "index_trend": trade.index_trend,
+        "vix_bucket": trade.vix_bucket,
+        "session_phase": trade.session_phase,
     }
 
 

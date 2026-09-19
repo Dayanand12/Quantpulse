@@ -12,6 +12,7 @@ past day can be regenerated later for analysis, not just "today".
 import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from io import BytesIO
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -19,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from core.application.interfaces.deployment_repository import IDeploymentRepository
+from core.domain.market_condition import split_market_condition
 from core.domain.metrics import PerformanceMetrics, compute_performance_metrics
 from core.domain.models import Trade
 from infrastructure.persistence.database import unit_of_work
@@ -179,3 +181,84 @@ def generate_all_time_report(
     trades = _fetch_all_trades(session_factory)
     filename = os.path.join(output_dir, "All_Time_Report.xlsx")
     return _write_report(trades, deployment_repository, filename)
+
+
+def _condition_breakdown_rows(trades: List[Trade]) -> List[dict]:
+    """One row per (strategy, market_condition) pair with at least one
+    trade — Trend/Volume/VWAP split into their own columns (see
+    core/domain/market_condition.py::split_market_condition) alongside the
+    combined label, so the sheet can be sorted/filtered on any of them to
+    see which strategy wins in which condition, not just eyeballed off the
+    Performance tab's heatmap. Trades without a recorded market_condition
+    (pre-dates that field, or missing entry indicators) are excluded
+    rather than lumped into a misleading "unknown" row — same convention
+    as core/domain/metrics.py::heatmap_by_strategy_and_condition."""
+    groups: Dict[tuple, List[Trade]] = defaultdict(list)
+    for t in trades:
+        if not t.strategy_name or not t.market_condition:
+            continue
+        groups[(t.strategy_name, t.market_condition)].append(t)
+
+    rows = []
+    for (strategy_name, condition), group in groups.items():
+        trend, volume, vwap = split_market_condition(condition)
+        m = compute_performance_metrics(group, capital=0)
+        rows.append({
+            "Strategy": strategy_name,
+            "Market Condition": condition,
+            "Trend": trend,
+            "Volume": volume,
+            "VWAP Position": vwap or "—",
+            "Trades": m.total_trades,
+            "Win Rate %": round(m.win_rate, 2) if m.win_rate is not None else None,
+            "Profit Factor": round(m.profit_factor, 2) if m.profit_factor is not None else None,
+            "Total P&L": round(m.total_pnl, 2),
+            "Avg R-Multiple": round(m.avg_r_multiple, 2) if m.avg_r_multiple is not None else None,
+        })
+    return sorted(rows, key=lambda r: r["Trades"], reverse=True)
+
+
+def export_performance_report(
+    trades: List[Trade],
+    by_strategy: List[dict],
+    filters: Dict[str, Optional[str]],
+) -> bytes:
+    """The Performance tab's "Download Report" button — the exact trades/
+    by_strategy breakdown server/main.py's /api/analytics/summary already
+    computed for whatever filters are active on screen, as a workbook:
+    the filters that produced this data (so the file is self-explanatory
+    once it's out of the browser), the per-strategy summary table shown
+    on screen, and a per-(strategy, market condition) breakdown for
+    sorting/filtering on which market condition a strategy actually wins
+    in. `by_strategy` entries carry a raw PerformanceMetrics object (not
+    yet asdict'd) — same list server/main.py builds before serializing it
+    for the JSON response.
+    """
+    filters_df = pd.DataFrame([
+        {"Filter": "Strategy", "Value": filters.get("strategy") or "All"},
+        {"Filter": "Symbol", "Value": filters.get("symbol") or "All"},
+        {"Filter": "Date From", "Value": filters.get("date_from") or "—"},
+        {"Filter": "Date To", "Value": filters.get("date_to") or "—"},
+        {"Filter": "Chart Bucketing", "Value": filters.get("timeframe") or "daily"},
+        {"Filter": "Generated At", "Value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    ])
+
+    summary_rows = []
+    for s in by_strategy:
+        row = _metrics_row(s["strategy_name"], s.get("capital", 0), s["metrics"])
+        row["Timeframe"] = s.get("timeframe") or "—"
+        summary_rows.append(row)
+    summary_df = pd.DataFrame(summary_rows)
+    if not summary_df.empty:
+        cols = [c for c in summary_df.columns if c != "Timeframe"]
+        cols.insert(1, "Timeframe")
+        summary_df = summary_df[cols]
+
+    condition_df = pd.DataFrame(_condition_breakdown_rows(trades))
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        filters_df.to_excel(writer, sheet_name="Filters Applied", index=False)
+        summary_df.to_excel(writer, sheet_name="Strategy Summary", index=False)
+        condition_df.to_excel(writer, sheet_name="By Market Condition", index=False)
+    return buffer.getvalue()

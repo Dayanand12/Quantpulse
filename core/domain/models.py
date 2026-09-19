@@ -145,6 +145,32 @@ class Trade:
     # reports don't need to recompute it from the raw values.
     market_condition: Optional[str] = None
 
+    # Structured regime dimensions (see core/domain/regime_snapshot.py),
+    # captured at the SAME entry moment as market_condition above but kept
+    # as independent columns instead of one composite string — so "which
+    # strategy works in which regime" can be sliced dimension by dimension
+    # (Strategy x regime_trend, Strategy x vix_bucket, ...) without
+    # fragmenting sample size across every possible combination. None
+    # wherever that dimension's inputs weren't available (a symbol this
+    # account doesn't track, e.g. INDIA VIX dropped from the watchlist) or
+    # for trades logged before these fields existed.
+    #
+    # regime_trend/regime_volatility: the traded symbol's OWN regime
+    # (classify_regime()'s "regime"/"volatility_state" — Bullish/Bearish
+    # Trend, Range, Transition / Compressed, Normal, High Expansion).
+    regime_trend: Optional[str] = None
+    regime_volatility: Optional[str] = None
+    # index_trend: NIFTY 50's own regime at the same moment — a stock can
+    # trend while the index chops (or vice versa), and that divergence is
+    # often the actual edge, not just the stock's own reading.
+    index_trend: Optional[str] = None
+    # vix_bucket: India VIX level bucket (Low/Medium/High) — the standard
+    # "which playbook applies today" dial (see regime_snapshot.py).
+    vix_bucket: Optional[str] = None
+    # session_phase: Opening (9:15-9:45) / Mid-day / Closing (14:00-15:30)
+    # — intraday edges are frequently time-of-day dependent.
+    session_phase: Optional[str] = None
+
     # Brokerage + STT + exchange/SEBI charges + stamp duty + GST for this
     # trade's round trip (see core/domain/charges.py). `pnl` above stays the
     # raw price-difference figure; `charges`/`net_pnl` are what the
@@ -274,6 +300,19 @@ class Deployment:
     deployments can reference the same strategy_name with different
     symbols/capital/config — each gets its own capital pool (see
     core/container.py::DeploymentRuntime).
+
+    symbols vs watchlist_id: exactly one is the deployment's real symbol
+    source. A fixed `symbols` tuple is a snapshot frozen at create/edit
+    time — the classic mode, unchanged. `watchlist_id` instead means "use
+    whatever this named Watchlist currently contains" — resolved fresh by
+    ExecutionManager on every evaluate() cycle (runners/paper_trading/
+    execution_manager.py), so editing the watchlist's symbols propagates
+    to every deployment bound to it immediately, live, no restart —
+    unlike a strategy's own conditions.json (see json_condition_strategy.py),
+    which IS frozen at registry-discovery time with no live-reload path.
+    `symbols` is still populated for a watchlist-bound deployment (kept in
+    sync as a last-resolved cache — see server/main.py::_deployment_to_dict)
+    so every existing symbols-reading caller keeps working unchanged.
     """
 
     id: str
@@ -282,3 +321,4 @@ class Deployment:
     capital: float
     config: StrategyConfig
     enabled: bool = True
+    watchlist_id: Optional[int] = None

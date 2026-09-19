@@ -8,6 +8,7 @@ import { SummaryCardRow } from "../components/analytics/SummaryCard"
 import { TopCandidatesTable } from "../components/analytics/TopCandidatesTable"
 import { backtestApi } from "../lib/backtestApi"
 import { formatStrategyParams } from "../lib/backtestTypes"
+import { downloadBlob } from "../lib/download"
 import type {
   BacktestResultDetail,
   BacktestResultSummary,
@@ -95,6 +96,8 @@ const SORT_METRICS: { key: keyof BacktestResultSummary; label: string; direction
 // design writeup.
 const COMPOSITE_SCORE_KEY = "__composite__"
 
+// "Analysis" tab of the Backtest page — see Backtest.tsx for the tab host
+// and BacktestRun.tsx for the "Run" tab.
 export function Analysis() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [strategy, setStrategy] = useState("")
@@ -360,15 +363,6 @@ export function Analysis() {
     }
   }
 
-  function downloadBlob(blob: Blob, filename: string) {
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   async function handleExportExcel() {
     setExporting(true)
     setExportError(null)
@@ -422,13 +416,10 @@ export function Analysis() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Analysis</h1>
-        <p className="mt-1 text-sm text-[var(--ink-muted)]">
-          Every backtest run gets logged automatically (see the Backtest tab) — pick a strategy and
-          browse everything that's been tested on it, instead of tracking results in a spreadsheet.
-        </p>
-      </div>
+      <p className="text-sm text-[var(--ink-muted)]">
+        Every backtest run gets logged automatically (see the Run tab) — pick a strategy and browse
+        everything that's been tested on it, instead of tracking results in a spreadsheet.
+      </p>
 
       <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] p-5 backdrop-blur-sm">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

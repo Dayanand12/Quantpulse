@@ -48,7 +48,13 @@ class SqlTradeJournal:
                         entry_atr_pct=trade.entry_atr_pct,
                         entry_vwap=trade.entry_vwap,
                         entry_volume_ratio=trade.entry_volume_ratio,
+                        entry_oi=trade.entry_oi,
                         market_condition=trade.market_condition,
+                        regime_trend=trade.regime_trend,
+                        regime_volatility=trade.regime_volatility,
+                        index_trend=trade.index_trend,
+                        vix_bucket=trade.vix_bucket,
+                        session_phase=trade.session_phase,
                         charges=trade.charges,
                         net_pnl=trade.net_pnl,
                     )

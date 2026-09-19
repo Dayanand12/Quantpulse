@@ -10,7 +10,7 @@ label is denormalized onto Trade at close time, using whatever the
 strategy itself saw at entry.
 """
 
-from typing import Optional
+from typing import Optional, Tuple
 
 TRENDING_ADX_THRESHOLD = 25.0
 HIGH_VOLUME_RATIO_THRESHOLD = 1.5
@@ -36,3 +36,20 @@ def classify_market_condition(
         parts.append("Above VWAP" if ltp >= vwap else "Below VWAP")
 
     return " / ".join(parts)
+
+
+def split_market_condition(
+    label: Optional[str],
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Inverse of the " / "-join above — for reports that want Trend/
+    Volume/VWAP as independently sortable columns instead of one combined
+    string (e.g. so "sort by Trend, then Win Rate" is possible in a
+    spreadsheet without parsing the label by hand). (None, None, None) for
+    a trade with no recorded condition."""
+    if not label:
+        return None, None, None
+    parts = label.split(" / ")
+    trend = parts[0] if len(parts) > 0 else None
+    volume = parts[1] if len(parts) > 1 else None
+    vwap = parts[2] if len(parts) > 2 else None
+    return trend, volume, vwap

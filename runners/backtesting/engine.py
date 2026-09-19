@@ -31,6 +31,7 @@ from core.domain.enums import OrderSide
 from core.domain.market_condition import classify_market_condition
 from core.domain.models import StrategyConfig, Trade
 from core.domain.indicator_registry import IndicatorSpec
+from core.domain.regime_snapshot import build_regime_fields
 from core.domain.strategy_conditions import VALID_SNAPSHOT_FIELDS
 from infrastructure.config.settings import get_settings
 from runners.backtesting.historical_loader import load_equity_csv
@@ -42,34 +43,51 @@ from runners.paper_trading.live_engine import SUPPORTED_TIMEFRAMES
 # e.g. "only go long while NIFTY itself is trending up". Hardcoded rather
 # than configurable: nothing has asked for a different index yet, and
 # adding that is a small extension of _regime_snapshot_series below if it
-# ever comes up.
+# ever comes up. INDIA VIX is joined the same way but ISN'T exposed to
+# strategy conditions (see VALID_SNAPSHOT_FIELDS — vix_ltp deliberately
+# isn't in that tuple), only to entry_snapshot for build_regime_fields'
+# vix_bucket dimension (core/domain/regime_snapshot.py).
 _REGIME_SYMBOL = "NIFTY 50"
+_VIX_SYMBOL = "INDIA VIX"
 
-# NIFTY 50's own snapshot series, computed once per timeframe and reused
-# across every symbol/strategy backtest in this process — its file is
-# ~1M rows, far too expensive to reload and re-resample on every single
-# run_backtest() call. Keyed by timeframe_minutes; a cached None means
-# "checked, the file genuinely isn't there" — `in` (not truthiness) is
-# what distinguishes that from "never checked yet", so a missing file
-# doesn't get retried on every call either.
-_regime_cache: Dict[int, Optional[pl.DataFrame]] = {}
+# Columns (snapshot_builder.py's own names -> the prefixed name joined
+# onto a traded symbol's bars) pulled from each index's snapshot series.
+# NIFTY carries everything classify_regime() needs for index_trend;
+# VIX only needs its own level for the vix_bucket dimension.
+_NIFTY_REGIME_COLUMNS = {
+    "ltp": "nifty_ltp", "ema9": "nifty_ema9", "ema21": "nifty_ema21",
+    "adx": "nifty_adx", "vwap": "nifty_vwap", "atr_pct": "nifty_atr_pct",
+}
+_VIX_REGIME_COLUMNS = {"ltp": "vix_ltp"}
+
+# NIFTY/VIX's own snapshot series, computed once per (symbol, timeframe)
+# and reused across every symbol/strategy backtest in this process — its
+# file is ~1M rows, far too expensive to reload and re-resample on every
+# single run_backtest() call. Keyed by (symbol, timeframe_minutes); a
+# cached None means "checked, the file genuinely isn't there" — `in` (not
+# truthiness) is what distinguishes that from "never checked yet", so a
+# missing file doesn't get retried on every call either.
+_regime_cache: Dict[tuple, Optional[pl.DataFrame]] = {}
 
 
-def _regime_snapshot_series(timeframe_minutes: int) -> Optional[pl.DataFrame]:
-    if timeframe_minutes in _regime_cache:
-        return _regime_cache[timeframe_minutes]
+def _regime_snapshot_series(
+    symbol: str, columns: Dict[str, str], timeframe_minutes: int
+) -> Optional[pl.DataFrame]:
+    cache_key = (symbol, timeframe_minutes)
+    if cache_key in _regime_cache:
+        return _regime_cache[cache_key]
 
-    csv_path = os.path.join(get_settings().historical_data_dir, f"{_REGIME_SYMBOL}_historical.csv")
+    csv_path = os.path.join(get_settings().historical_data_dir, f"{symbol}_historical.csv")
     try:
         regime_df = load_equity_csv(csv_path)
     except FileNotFoundError:
-        _regime_cache[timeframe_minutes] = None
+        _regime_cache[cache_key] = None
         return None
 
     bars = build_snapshot_series(regime_df, timeframe_minutes).select(
-        "date", "ema9", "ema21", "adx",
-    ).rename({"ema9": "nifty_ema9", "ema21": "nifty_ema21", "adx": "nifty_adx"})
-    _regime_cache[timeframe_minutes] = bars
+        "date", *columns.keys(),
+    ).rename(columns)
+    _regime_cache[cache_key] = bars
     return bars
 
 # Keys forwarded to IStrategy.screen() — exactly LiveEngine.get_snapshot()'s
@@ -91,6 +109,7 @@ class _TradeState:
     target: float
     trail_price: float
     entry_snapshot: dict
+    entry_date: dt.datetime
 
 
 def _parse_hhmm(value: str) -> dt.time:
@@ -189,13 +208,22 @@ def run_backtest(
     # any None required field as "condition not met", same as every other
     # snapshot field. Skipped entirely when backtesting NIFTY 50 itself.
     if symbol != _REGIME_SYMBOL:
-        regime_bars = _regime_snapshot_series(timeframe_minutes)
+        regime_bars = _regime_snapshot_series(_REGIME_SYMBOL, _NIFTY_REGIME_COLUMNS, timeframe_minutes)
         if regime_bars is not None:
             bars = bars.join(regime_bars, on="date", how="left")
     if "nifty_ema9" not in bars.columns:
         bars = bars.with_columns(
-            pl.lit(None, dtype=pl.Float64).alias(c) for c in ("nifty_ema9", "nifty_ema21", "nifty_adx")
+            pl.lit(None, dtype=pl.Float64).alias(c) for c in _NIFTY_REGIME_COLUMNS.values()
         )
+
+    # Same join for INDIA VIX's own level (vix_bucket dimension only —
+    # see _VIX_REGIME_COLUMNS above).
+    if symbol != _VIX_SYMBOL:
+        vix_bars = _regime_snapshot_series(_VIX_SYMBOL, _VIX_REGIME_COLUMNS, timeframe_minutes)
+        if vix_bars is not None:
+            bars = bars.join(vix_bars, on="date", how="left")
+    if "vix_ltp" not in bars.columns:
+        bars = bars.with_columns(pl.lit(None, dtype=pl.Float64).alias("vix_ltp"))
 
     if date_from is not None:
         bars = bars.filter(pl.col("date").dt.date() >= date_from)
@@ -254,6 +282,7 @@ def run_backtest(
                     exit_price=exit_price,
                     pnl=pnl,
                     closed_at=bar_date,
+                    opened_at=state.entry_date,
                     initial_stop_loss=state.stop_loss,
                     deployment_id=deployment_id,
                     strategy_name=strategy.name,
@@ -269,6 +298,7 @@ def run_backtest(
                     ),
                     charges=charges,
                     net_pnl=net_pnl,
+                    **build_regime_fields(snap, state.entry_date),
                 ))
                 state = None
 
@@ -288,7 +318,15 @@ def run_backtest(
                     stop_loss=levels["stop_loss"],
                     target=levels["target"],
                     trail_price=levels["trail_price"],
-                    entry_snapshot=snapshot,
+                    # The FULL bar row, not the strategy-facing `snapshot`
+                    # above (which is filtered to VALID_SNAPSHOT_FIELDS) —
+                    # this is only ever read back for Trade-building
+                    # (entry_rsi/market_condition/build_regime_fields), so
+                    # it can safely carry nifty_ltp/nifty_vwap/nifty_atr_pct/
+                    # vix_ltp too without those ever reaching
+                    # IStrategy.screen().
+                    entry_snapshot=dict(row),
+                    entry_date=bar_date,
                 )
                 cycles_today += 1
 

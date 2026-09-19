@@ -39,7 +39,13 @@ class TradeRecord(Base):
     entry_atr_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     entry_vwap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     entry_volume_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    entry_oi: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     market_condition: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    regime_trend: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    regime_volatility: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    index_trend: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    vix_bucket: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    session_phase: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     charges: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     net_pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
@@ -121,6 +127,13 @@ class DeploymentRecord(Base):
     start_time: Mapped[str] = mapped_column(String(5), default="09:20")
     end_time: Mapped[str] = mapped_column(String(5), default="11:30")
     timeframe: Mapped[str] = mapped_column(String(10), default="minute")
+    # NULL = symbols_json is the real source (classic, fixed-list mode).
+    # Set = this deployment instead trades whatever this watchlist_id
+    # currently contains, re-read live every evaluate() cycle — see
+    # core/domain/models.py::Deployment's docstring. symbols_json is still
+    # kept updated as a last-resolved cache, never the source of truth
+    # while this is set.
+    watchlist_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
 
 
 class BacktestResultRecord(Base):

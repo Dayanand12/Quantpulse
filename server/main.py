@@ -19,10 +19,11 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from services.state_store import stage_results
-from services.eod_report import generate_all_time_report, generate_eod_report
+from services.eod_report import export_performance_report, generate_all_time_report, generate_eod_report
 from services.market_analysis_engine import MarketAnalysisEngine
 from services.report_generator import generate_report
 from core.application.interfaces.trade_repository import TradeFilter
@@ -42,7 +43,7 @@ from core.domain.metrics import (
 )
 from core.application.interfaces.symbol_master_repository import SymbolSuggestion
 from core.domain.charges import ChargeConfig
-from core.domain.models import Deployment, StrategyConfig, Watchlist
+from core.domain.models import Deployment, StrategyConfig, Trade, Watchlist
 from core.exceptions import NotFoundError, ValidationError, register_exception_handlers
 from infrastructure.config.settings import Settings
 from infrastructure.logging.logger import get_logger
@@ -98,7 +99,11 @@ HHMM_PATTERN = r"^([01]\d|2[0-3]):[0-5]\d$"
 
 class DeploymentRequest(BaseModel):
     strategy_name: str
-    symbols: List[str]
+    # Exactly one of symbols/watchlist_id is the real symbol source — see
+    # core/domain/models.py::Deployment's docstring. symbols may be empty
+    # when watchlist_id is set.
+    symbols: List[str] = []
+    watchlist_id: Optional[int] = None
     capital: float = Field(gt=0)
     quantity: int = Field(gt=0)
     stoploss_pct: float = Field(gt=0)
@@ -109,24 +114,6 @@ class DeploymentRequest(BaseModel):
     start_time: str = Field(default="09:20", pattern=HHMM_PATTERN)
     end_time: str = Field(default="11:30", pattern=HHMM_PATTERN)
     timeframe: str = "minute"
-
-
-def _deployment_to_dict(deployment: Deployment) -> dict:
-    return {
-        "id": deployment.id,
-        "strategy_name": deployment.strategy_name,
-        "symbols": list(deployment.symbols),
-        "capital": deployment.capital,
-        "quantity": deployment.config.quantity,
-        "stoploss_pct": deployment.config.stoploss_pct,
-        "target_pct": deployment.config.target_pct,
-        "trailing_pct": deployment.config.trailing_pct,
-        "max_cycles_per_day": deployment.config.max_cycles_per_day,
-        "enabled": deployment.enabled,
-        "start_time": deployment.config.start_time,
-        "end_time": deployment.config.end_time,
-        "timeframe": deployment.config.timeframe,
-    }
 
 
 def _watchlist_to_dict(watchlist: Watchlist) -> dict:
@@ -156,17 +143,34 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 "trading works, and disable it again once you're done."
             )
 
-        cleaned = list(dict.fromkeys(s.strip().upper() for s in body.symbols if s.strip()))
-        if not cleaned:
-            raise ValidationError("Deployment must include at least one symbol.")
+        if body.watchlist_id is not None:
+            # watchlist-bound mode — the returned list here is only a
+            # resolved-now cache for the stored symbols_json (see
+            # core/domain/models.py::Deployment's docstring); the live
+            # engine re-resolves this watchlist fresh every cycle instead
+            # of trusting this snapshot (runners/paper_trading/
+            # execution_manager.py::current_symbols).
+            named_watchlists = {w.id: w for w in container.watchlist_repository.list_watchlists()}
+            watchlist = named_watchlists.get(body.watchlist_id)
+            if watchlist is None:
+                raise ValidationError(f"Unknown watchlist_id: {body.watchlist_id}")
+            if not watchlist.symbols:
+                raise ValidationError(f"Watchlist {watchlist.name!r} has no symbols yet.")
+            cleaned = list(watchlist.symbols)
+        else:
+            cleaned = list(dict.fromkeys(s.strip().upper() for s in body.symbols if s.strip()))
+            if not cleaned:
+                raise ValidationError(
+                    "Deployment must include at least one symbol, or set watchlist_id."
+                )
 
-        watchlist = set(container.watchlist_repository.get_all_symbols())
-        unknown = [s for s in cleaned if s not in watchlist]
-        if unknown:
-            raise ValidationError(
-                f"Symbols not in watchlist: {', '.join(unknown)}. "
-                "Add them to the watchlist first."
-            )
+            all_symbols = set(container.watchlist_repository.get_all_symbols())
+            unknown = [s for s in cleaned if s not in all_symbols]
+            if unknown:
+                raise ValidationError(
+                    f"Symbols not in watchlist: {', '.join(unknown)}. "
+                    "Add them to the watchlist first."
+                )
 
         if body.start_time >= body.end_time:
             raise ValidationError(
@@ -186,6 +190,34 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
         # a configuration error anymore.
 
         return cleaned
+
+    def _deployment_to_dict(deployment: Deployment) -> dict:
+        # Watchlist-bound: resolve the CURRENT membership here rather than
+        # trusting deployment.symbols (a possibly-stale cache — see
+        # core/domain/models.py::Deployment's docstring) so the UI always
+        # shows what's actually being traded right now, same as the live
+        # engine's own per-cycle resolution.
+        if deployment.watchlist_id is not None:
+            symbols = container.watchlist_repository.get_symbols(deployment.watchlist_id)
+        else:
+            symbols = list(deployment.symbols)
+
+        return {
+            "id": deployment.id,
+            "strategy_name": deployment.strategy_name,
+            "symbols": symbols,
+            "watchlist_id": deployment.watchlist_id,
+            "capital": deployment.capital,
+            "quantity": deployment.config.quantity,
+            "stoploss_pct": deployment.config.stoploss_pct,
+            "target_pct": deployment.config.target_pct,
+            "trailing_pct": deployment.config.trailing_pct,
+            "max_cycles_per_day": deployment.config.max_cycles_per_day,
+            "enabled": deployment.enabled,
+            "start_time": deployment.config.start_time,
+            "end_time": deployment.config.end_time,
+            "timeframe": deployment.config.timeframe,
+        }
 
     def build_positions_view():
         snapshot = container.trading_engine.get_snapshot()
@@ -472,6 +504,54 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
     # number here comes from core/domain/metrics.py — this route only
     # filters, groups, and serializes; no metric math lives here.
     # -----------------------------
+    def _strategy_breakdown(trades: List[Trade], strategy_filter: Optional[str]) -> List[dict]:
+        """Per-(deployment) metrics for `trades` — shared by
+        /api/analytics/summary (which asdict()s `metrics` for JSON) and
+        /api/analytics/summary/export (which wants the raw
+        PerformanceMetrics object), so the two never drift apart on what
+        counts as "the strategy breakdown" for a given filter set."""
+        deployments = container.deployment_repository.list_deployments()
+        if strategy_filter:
+            deployments = [d for d in deployments if d.strategy_name == strategy_filter]
+
+        trades_by_deployment: dict = {}
+        for t in trades:
+            trades_by_deployment.setdefault(t.deployment_id, []).append(t)
+
+        by_strategy = []
+        seen_ids = set()
+        for deployment in deployments:
+            seen_ids.add(deployment.id)
+            deployment_trades = trades_by_deployment.get(deployment.id, [])
+            by_strategy.append({
+                "strategy_name": deployment.strategy_name,
+                "deployment_id": deployment.id,
+                "capital": deployment.capital,
+                # Distinguishes two deployments of the same strategy_name
+                # on different timeframes — same strategy_name would
+                # otherwise render as two identical-looking rows.
+                "timeframe": deployment.config.timeframe,
+                "metrics": compute_performance_metrics(deployment_trades, deployment.capital),
+            })
+
+        # Trades tagged with a deployment that's since been deleted still
+        # count towards "overall", and get their own row here — capital is
+        # unknown for it, so %-of-capital metrics come back None. Mirrors
+        # backend/eod_report.py's orphaned-deployment handling.
+        for deployment_id, deployment_trades in trades_by_deployment.items():
+            if deployment_id in seen_ids:
+                continue
+            strategy_name = deployment_trades[0].strategy_name or "Unknown strategy"
+            by_strategy.append({
+                "strategy_name": strategy_name,
+                "deployment_id": deployment_id,
+                "capital": 0,
+                "timeframe": None,
+                "metrics": compute_performance_metrics(deployment_trades, 0),
+            })
+
+        return by_strategy
+
     @app.get("/api/analytics/summary")
     def analytics_summary(
         strategy: Optional[str] = None,
@@ -500,51 +580,14 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             )
         )
 
-        deployments = container.deployment_repository.list_deployments()
-        if strategy:
-            deployments = [d for d in deployments if d.strategy_name == strategy]
-
-        trades_by_deployment: dict = {}
-        for t in trades:
-            trades_by_deployment.setdefault(t.deployment_id, []).append(t)
-
-        by_strategy = []
-        seen_ids = set()
-        for deployment in deployments:
-            seen_ids.add(deployment.id)
-            deployment_trades = trades_by_deployment.get(deployment.id, [])
-            by_strategy.append({
-                "strategy_name": deployment.strategy_name,
-                "deployment_id": deployment.id,
-                "capital": deployment.capital,
-                # Distinguishes two deployments of the same strategy_name
-                # on different timeframes — same strategy_name would
-                # otherwise render as two identical-looking rows.
-                "timeframe": deployment.config.timeframe,
-                "metrics": asdict(compute_performance_metrics(deployment_trades, deployment.capital)),
-            })
-
-        # Trades tagged with a deployment that's since been deleted still
-        # count towards "overall", and get their own row here — capital is
-        # unknown for it, so %-of-capital metrics come back None. Mirrors
-        # backend/eod_report.py's orphaned-deployment handling.
-        for deployment_id, deployment_trades in trades_by_deployment.items():
-            if deployment_id in seen_ids:
-                continue
-            strategy_name = deployment_trades[0].strategy_name or "Unknown strategy"
-            by_strategy.append({
-                "strategy_name": strategy_name,
-                "deployment_id": deployment_id,
-                "capital": 0,
-                "timeframe": None,
-                "metrics": asdict(compute_performance_metrics(deployment_trades, 0)),
-            })
-
-        total_capital = sum(d.capital for d in deployments)
+        by_strategy = _strategy_breakdown(trades, strategy)
+        # Orphaned-deployment entries carry capital=0 (see _strategy_breakdown),
+        # so summing every row here is equivalent to summing real deployments only.
+        total_capital = sum(s["capital"] for s in by_strategy)
 
         return {
             "overall": asdict(compute_performance_metrics(trades, total_capital)),
-            "by_strategy": by_strategy,
+            "by_strategy": [{**s, "metrics": asdict(s["metrics"])} for s in by_strategy],
             "equity_curve": [asdict(p) for p in equity_curve(trades, timeframe)],
             "pnl_by_period": [asdict(p) for p in pnl_by_period(trades, timeframe)],
             "drawdown": [asdict(p) for p in drawdown_series(trades, total_capital)],
@@ -563,6 +606,50 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             "available_strategies": available_strategies,
             "available_symbols": available_symbols,
         }
+
+    # Declared as its own path (not a query flag on /summary above) so it
+    # can return a binary .xlsx Response instead of JSON. Takes the exact
+    # same filters as /summary — the "Download Report" button on the
+    # Performance tab passes whatever's currently in the filter bar, so the
+    # file always matches what's on screen.
+    @app.get("/api/analytics/summary/export")
+    def analytics_summary_export(
+        strategy: Optional[str] = None,
+        symbol: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        timeframe: str = "daily",
+    ):
+        if timeframe not in ("daily", "weekly", "monthly"):
+            raise ValidationError(f"Invalid timeframe: {timeframe}")
+
+        trades = container.trade_repository.list_trades(
+            TradeFilter(
+                strategy_name=strategy or None,
+                symbol=symbol or None,
+                date_from=dt.date.fromisoformat(date_from) if date_from else None,
+                date_to=dt.date.fromisoformat(date_to) if date_to else None,
+            )
+        )
+        by_strategy = _strategy_breakdown(trades, strategy)
+
+        content = export_performance_report(
+            trades,
+            by_strategy,
+            filters={
+                "strategy": strategy,
+                "symbol": symbol,
+                "date_from": date_from,
+                "date_to": date_to,
+                "timeframe": timeframe,
+            },
+        )
+        filename = f"performance_report_{dt.date.today().isoformat()}.xlsx"
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     # -----------------------------
     # REST: strategies + deployments
@@ -705,6 +792,7 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                     container.event_bus,
                     container.strategy_registry,
                     container.charge_config_repository,
+                    container.watchlist_repository,
                 )
             )
             return
@@ -716,6 +804,11 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
         existing.deployment = deployment
         em = existing.execution_manager
         em.symbols = list(deployment.symbols)
+        # watchlist_id is safe to hot-swap (unlike strategy_name above) —
+        # current_symbols() re-reads it fresh every evaluate() cycle, so
+        # switching a deployment onto/off/between watchlists here takes
+        # effect on its very next cycle, no restart, no orphaned state.
+        em.watchlist_id = deployment.watchlist_id
         em.quantity = deployment.config.quantity
         em.stoploss_pct = deployment.config.stoploss_pct
         em.target_pct = deployment.config.target_pct
@@ -743,6 +836,7 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 timeframe=body.timeframe,
             ),
             enabled=body.enabled,
+            watchlist_id=body.watchlist_id,
         )
         container.deployment_repository.save_deployment(deployment)
         _sync_deployment_runtime(deployment)
@@ -771,6 +865,7 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
                 timeframe=body.timeframe,
             ),
             enabled=body.enabled,
+            watchlist_id=body.watchlist_id,
         )
         container.deployment_repository.save_deployment(deployment)
         _sync_deployment_runtime(deployment)
@@ -842,6 +937,21 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
 
     @app.delete("/api/watchlists/{watchlist_id}")
     def delete_watchlist(watchlist_id: int):
+        # A watchlist-bound deployment (Deployment.watchlist_id) would
+        # otherwise silently start screening zero symbols the instant
+        # this watchlist's rows are gone — get_symbols() on a deleted id
+        # just returns [] (SqlWatchlistRepository), not an error, so
+        # nothing else would ever flag this. Same guard shape as
+        # backtest_server.py's strategy-delete protection.
+        bound_by = [
+            d.id for d in container.deployment_repository.list_deployments()
+            if d.watchlist_id == watchlist_id
+        ]
+        if bound_by:
+            raise ValidationError(
+                f"Can't delete this watchlist — {len(bound_by)} deployment(s) are bound to it "
+                "(switch them to a different watchlist or fixed symbols first)."
+            )
         try:
             container.watchlist_repository.delete_watchlist(watchlist_id)
         except ValueError as e:

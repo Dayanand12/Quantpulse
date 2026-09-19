@@ -130,6 +130,54 @@ def test_closed_trade_carries_the_entry_market_snapshot():
     assert trade.market_condition == "Trending / High Volume / Above VWAP"
 
 
+def test_closed_trade_carries_regime_fields_when_nifty_and_vix_are_tracked():
+    # Regression coverage for the regime-logging feature: NIFTY 50/INDIA
+    # VIX's own snapshots (present in the same multi-symbol `snapshot`
+    # ExecutionManager already reads every cycle) must reach the closed
+    # Trade's regime_trend/regime_volatility/index_trend/vix_bucket, end
+    # to end through _manage_entries -> PaperOrderRepository/PaperBroker
+    # -> mappers.trade_from_raw.
+    snapshot = {
+        "RELIANCE": {
+            "ltp": 250.0, "rsi": 28.0, "adx": 31.0, "atr_pct": 1.2,
+            "vwap": 248.0, "volume_ratio": 2.0, "ema9": 251.0, "ema21": 247.0,
+        },
+        "NIFTY 50": {
+            "ltp": 24800.0, "ema9": 24700.0, "ema21": 24900.0,
+            "adx": 15.0, "vwap": 24850.0, "atr_pct": 0.4,
+        },
+        "INDIA VIX": {"ltp": 12.0},
+    }
+    manager, repo, strategy = make_manager(snapshot, side=OrderSide.SELL)
+
+    manager.evaluate()  # enters at 250.0
+
+    strategy.candidates = []
+    snapshot["RELIANCE"]["ltp"] = 244.0  # breach target
+    manager.evaluate()
+
+    trade = repo.get_all()[0]
+    assert trade.regime_trend == "Bullish Trend"  # ema9>ema21 and ltp>vwap for RELIANCE
+    assert trade.regime_volatility == "Normal"
+    assert trade.index_trend == "Bearish Trend"  # NIFTY's own ema9<ema21 and ltp<vwap
+    assert trade.vix_bucket == "Low"
+
+
+def test_closed_trade_regime_fields_none_when_nifty_and_vix_not_tracked():
+    snapshot = {"RELIANCE": {"ltp": 250.0}}
+    manager, repo, strategy = make_manager(snapshot, side=OrderSide.SELL)
+
+    manager.evaluate()
+
+    strategy.candidates = []
+    snapshot["RELIANCE"]["ltp"] = 244.0
+    manager.evaluate()
+
+    trade = repo.get_all()[0]
+    assert trade.index_trend is None
+    assert trade.vix_bucket is None
+
+
 def test_does_not_reenter_symbol_already_open():
     snapshot = {"RELIANCE": {"ltp": 250.0}}
     manager, repo, _ = make_manager(snapshot, side=OrderSide.SELL)
@@ -261,3 +309,69 @@ def test_evaluate_defaults_to_minute_timeframe_when_not_configured():
     manager.evaluate()
 
     assert requested == ["minute"]
+
+
+# ---------------------------------------------------------------------------
+# watchlist_id binding — current_symbols() (core/domain/models.py::
+# Deployment's docstring: watchlist_id, when set, is the real symbol
+# source, re-read fresh every call instead of the frozen `symbols` list)
+# ---------------------------------------------------------------------------
+
+
+class _FakeWatchlistRepository:
+    def __init__(self, symbols_by_id):
+        self._symbols_by_id = symbols_by_id
+
+    def get_symbols(self, watchlist_id):
+        return list(self._symbols_by_id.get(watchlist_id, []))
+
+
+def test_current_symbols_uses_the_frozen_list_when_no_watchlist_bound():
+    manager, _, _ = make_manager({}, symbols=["RELIANCE", "INFY"])
+
+    assert manager.current_symbols() == ["RELIANCE", "INFY"]
+
+
+def test_current_symbols_resolves_from_the_watchlist_when_bound():
+    watchlists = _FakeWatchlistRepository({7: ["WIPRO", "TCS"]})
+    manager, _, _ = make_manager(
+        {},
+        symbols=["RELIANCE"],  # present but must be ignored — watchlist_id wins
+        watchlist_repository=watchlists,
+        watchlist_id=7,
+    )
+
+    assert manager.current_symbols() == ["WIPRO", "TCS"]
+
+
+def test_current_symbols_reflects_a_watchlist_edit_on_the_very_next_call():
+    # No caching — a watchlist edit takes effect on this deployment's next
+    # 3-second cycle (deployment_runner.py), not on the next restart, the
+    # way editing a strategy's own conditions.json would require.
+    watchlists = _FakeWatchlistRepository({7: ["WIPRO"]})
+    manager, _, _ = make_manager(
+        {}, watchlist_repository=watchlists, watchlist_id=7,
+    )
+
+    assert manager.current_symbols() == ["WIPRO"]
+
+    watchlists._symbols_by_id[7] = ["WIPRO", "ASIANPAINT"]
+
+    assert manager.current_symbols() == ["WIPRO", "ASIANPAINT"]
+
+
+def test_evaluate_screens_the_watchlists_current_symbols_when_bound():
+    watchlists = _FakeWatchlistRepository({7: ["WIPRO"]})
+    snapshot = {"WIPRO": {"ltp": 400.0}, "RELIANCE": {"ltp": 250.0}}
+    manager, repo, strategy = make_manager(
+        snapshot,
+        side=OrderSide.BUY,
+        candidates=["WIPRO", "RELIANCE"],  # strategy would take both — only WIPRO is in the watchlist
+        watchlist_repository=watchlists,
+        watchlist_id=7,
+    )
+
+    manager.evaluate()
+
+    assert repo.get_open_position("WIPRO") is not None
+    assert repo.get_open_position("RELIANCE") is None

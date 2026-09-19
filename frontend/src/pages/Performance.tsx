@@ -18,6 +18,7 @@ import { SummaryCardRow } from "../components/analytics/SummaryCard"
 import { WinRateGauge } from "../components/analytics/WinRateGauge"
 import { useAnalytics } from "../hooks/useAnalytics"
 import { api } from "../lib/api"
+import { downloadBlob } from "../lib/download"
 import type { StrategyBreakdown, Trade } from "../lib/types"
 
 const PERIOD_LABEL = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" } as const
@@ -33,6 +34,22 @@ export function Performance() {
   const [strategyTrades, setStrategyTrades] = useState<Trade[]>([])
   const [tradesLoading, setTradesLoading] = useState(false)
   const [tradesError, setTradesError] = useState<string | null>(null)
+
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  async function handleDownloadReport() {
+    setExporting(true)
+    setExportError(null)
+    try {
+      const blob = await api.analyticsSummaryExport(filters)
+      downloadBlob(blob, `performance_report_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : "Failed to export.")
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // Same filters already applied to the by_strategy breakdown above, so the
   // trades shown here always match the row's summarized metrics — narrowed
@@ -69,12 +86,26 @@ export function Performance() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Performance</h1>
-        <p className="mt-1 text-sm text-[var(--ink-muted)]">
-          Every number below comes from the same metrics engine for every strategy — nothing
-          here is strategy-specific.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Performance</h1>
+          <p className="mt-1 text-sm text-[var(--ink-muted)]">
+            Every number below comes from the same metrics engine for every strategy — nothing
+            here is strategy-specific.
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            type="button"
+            onClick={handleDownloadReport}
+            disabled={exporting || !data}
+            title="Download the strategy summary and a per-strategy market-condition breakdown as .xlsx, for whatever filters are set above"
+            className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--page)] disabled:opacity-50"
+          >
+            {exporting ? "Exporting…" : "Download Report"}
+          </button>
+          {exportError && <p className="text-[11px] text-[var(--status-critical)]">{exportError}</p>}
+        </div>
       </div>
 
       {error && <p className="text-sm text-[var(--status-critical)]">{error}</p>}

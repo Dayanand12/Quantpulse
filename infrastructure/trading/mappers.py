@@ -9,6 +9,7 @@ that shape into core.domain.models).
 from core.domain.enums import OrderSide
 from core.domain.market_condition import classify_market_condition
 from core.domain.models import Position, RejectedEntry, Trade
+from core.domain.regime_snapshot import build_regime_fields
 
 
 def position_from_raw(symbol: str, raw: dict) -> Position:
@@ -49,12 +50,14 @@ def trade_from_raw(raw: dict) -> Trade:
     kwargs["entry_atr_pct"] = snapshot.get("atr_pct")
     kwargs["entry_vwap"] = snapshot.get("vwap")
     kwargs["entry_volume_ratio"] = snapshot.get("volume_ratio")
+    kwargs["entry_oi"] = snapshot.get("oi")
     kwargs["market_condition"] = classify_market_condition(
         ltp=snapshot.get("ltp"),
         adx=snapshot.get("adx"),
         vwap=snapshot.get("vwap"),
         volume_ratio=snapshot.get("volume_ratio"),
     )
+    kwargs.update(build_regime_fields(snapshot, kwargs["opened_at"]))
 
     return Trade(**kwargs)
 

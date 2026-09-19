@@ -22,6 +22,14 @@ async function getJSON<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function getBlob(path: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}${path}`)
+  if (!res.ok) {
+    throw new Error(`${path} -> ${res.status}`)
+  }
+  return res.blob()
+}
+
 async function sendJSON<T>(path: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method,
@@ -33,6 +41,15 @@ async function sendJSON<T>(path: string, method: string, body?: unknown): Promis
     throw new Error(detail?.detail ?? `${path} -> ${res.status}`)
   }
   return res.json() as Promise<T>
+}
+
+function analyticsFilterParams(filters: AnalyticsFilters): string {
+  const params = new URLSearchParams({ timeframe: filters.timeframe })
+  if (filters.strategy) params.set("strategy", filters.strategy)
+  if (filters.symbol) params.set("symbol", filters.symbol)
+  if (filters.date_from) params.set("date_from", filters.date_from)
+  if (filters.date_to) params.set("date_to", filters.date_to)
+  return params.toString()
 }
 
 export const api = {
@@ -64,14 +81,14 @@ export const api = {
   saveStrategySource: (name: string, source: string) =>
     sendJSON<StrategySource>(`/api/strategy-source/${name}`, "PUT", { source }),
 
-  analyticsSummary: (filters: AnalyticsFilters) => {
-    const params = new URLSearchParams({ timeframe: filters.timeframe })
-    if (filters.strategy) params.set("strategy", filters.strategy)
-    if (filters.symbol) params.set("symbol", filters.symbol)
-    if (filters.date_from) params.set("date_from", filters.date_from)
-    if (filters.date_to) params.set("date_to", filters.date_to)
-    return getJSON<AnalyticsSummary>(`/api/analytics/summary?${params.toString()}`)
-  },
+  analyticsSummary: (filters: AnalyticsFilters) =>
+    getJSON<AnalyticsSummary>(`/api/analytics/summary?${analyticsFilterParams(filters)}`),
+
+  // Same filters as analyticsSummary above, so the downloaded workbook
+  // always matches whatever's currently on screen — see
+  // services/eod_report.py::export_performance_report.
+  analyticsSummaryExport: (filters: AnalyticsFilters) =>
+    getBlob(`/api/analytics/summary/export?${analyticsFilterParams(filters)}`),
 
   trades: (params?: {
     today?: boolean
