@@ -368,22 +368,33 @@ def heatmap_by_strategy_and_symbol(trades: List[Trade]) -> List[HeatmapRow]:
     ]
 
 
-def heatmap_by_strategy_and_condition(trades: List[Trade]) -> List[HeatmapRow]:
-    """Same as heatmap_by_strategy_and_symbol but bucketed by the entry-time
-    market_condition label (core/domain/market_condition.py) instead of
-    symbol. Trades without a market_condition (logged before that field
-    existed, or missing entry indicators) are excluded rather than lumped
-    into a misleading "unknown" bucket."""
+def heatmap_by_strategy_and_field(trades: List[Trade], field: str) -> List[HeatmapRow]:
+    """Same as heatmap_by_strategy_and_symbol but bucketed by any single
+    string-valued Trade field instead of symbol — market_condition,
+    regime_trend, regime_volatility, index_trend, vix_bucket,
+    session_phase (core/domain/regime_snapshot.py). Trades where that
+    field is None (logged before it existed, or its inputs weren't
+    available — e.g. INDIA VIX dropped from the watchlist) are excluded
+    rather than lumped into a misleading "unknown" bucket — same
+    convention every one of these dimensions already follows."""
     groups: Dict[tuple, List[Trade]] = defaultdict(list)
     for t in trades:
-        if not t.strategy_name or not t.market_condition:
+        value = getattr(t, field)
+        if not t.strategy_name or not value:
             continue
-        groups[(t.strategy_name, t.market_condition)].append(t)
+        groups[(t.strategy_name, value)].append(t)
 
     return [
-        HeatmapRow(row=strategy, column=condition, cell=_heatmap_cell(group))
-        for (strategy, condition), group in groups.items()
+        HeatmapRow(row=strategy, column=value, cell=_heatmap_cell(group))
+        for (strategy, value), group in groups.items()
     ]
+
+
+def heatmap_by_strategy_and_condition(trades: List[Trade]) -> List[HeatmapRow]:
+    """market_condition specifically — kept as its own name since it
+    predates and is still called separately from server/main.py's
+    heatmap_strategy_condition key."""
+    return heatmap_by_strategy_and_field(trades, "market_condition")
 
 
 @dataclass(frozen=True)

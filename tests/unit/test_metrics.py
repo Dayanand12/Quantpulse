@@ -8,6 +8,7 @@ from core.domain.metrics import (
     drawdown_series,
     equity_curve,
     heatmap_by_strategy_and_condition,
+    heatmap_by_strategy_and_field,
     heatmap_by_strategy_and_symbol,
     pnl_by_period,
     profit_distribution,
@@ -27,6 +28,7 @@ def make_trade(
     symbol="RELIANCE",
     strategy_name=None,
     market_condition=None,
+    regime_trend=None,
 ):
     return Trade(
         symbol=symbol,
@@ -39,6 +41,7 @@ def make_trade(
         initial_stop_loss=initial_stop_loss,
         strategy_name=strategy_name,
         market_condition=market_condition,
+        regime_trend=regime_trend,
     )
 
 
@@ -153,6 +156,28 @@ def test_heatmap_by_strategy_and_condition_excludes_missing_condition():
     }
     assert by_key[("ema_crossover", "Trending / High Volume")].total_trades == 2
     assert by_key[("ema_crossover", "Ranging / Normal Volume")].total_trades == 1
+
+
+def test_heatmap_by_strategy_and_field_groups_by_arbitrary_regime_field():
+    # Generalized version behind heatmap_by_strategy_and_condition above —
+    # same grouping/exclusion rules, but for any regime dimension
+    # (core/domain/regime_snapshot.py) instead of just market_condition.
+    trades = [
+        make_trade(100, strategy_name="ema_crossover", regime_trend="Bullish Trend"),
+        make_trade(-30, strategy_name="ema_crossover", regime_trend="Bullish Trend"),
+        make_trade(50, strategy_name="ema_crossover", regime_trend="Range"),
+        make_trade(10, strategy_name="ema_crossover", regime_trend=None),  # excluded
+    ]
+
+    rows = heatmap_by_strategy_and_field(trades, "regime_trend")
+    by_key = {(r.row, r.column): r.cell for r in rows}
+
+    assert set(by_key.keys()) == {
+        ("ema_crossover", "Bullish Trend"),
+        ("ema_crossover", "Range"),
+    }
+    assert by_key[("ema_crossover", "Bullish Trend")].total_trades == 2
+    assert by_key[("ema_crossover", "Range")].total_trades == 1
 
 
 def test_heatmap_cell_has_no_capital_dependent_fields():

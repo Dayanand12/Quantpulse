@@ -419,6 +419,11 @@ export interface AnalyticsSummary {
   rolling_sharpe: RollingSharpePoint[]
   heatmap_strategy_symbol: HeatmapRow[]
   heatmap_strategy_condition: HeatmapRow[]
+  // Keyed by Trade field name (regime_trend, regime_volatility,
+  // index_trend, vix_bucket, session_phase — see core/domain/
+  // regime_snapshot.py) — the Performance tab's regime dimension picker
+  // switches between these without a separate fetch per dimension.
+  heatmap_strategy_regime: Record<string, HeatmapRow[]>
   strategy_trend: StrategyTrendPoint[]
   strategy_correlation: CorrelationPair[]
   available_strategies: string[]

@@ -29,6 +29,7 @@ def _to_domain(record: DeploymentRecord) -> Deployment:
             timeframe=record.timeframe,
         ),
         enabled=record.enabled,
+        watchlist_id=record.watchlist_id,
     )
 
 
@@ -63,6 +64,7 @@ class SqlDeploymentRepository(IDeploymentRepository):
             record.start_time = deployment.config.start_time
             record.end_time = deployment.config.end_time
             record.timeframe = deployment.config.timeframe
+            record.watchlist_id = deployment.watchlist_id
             session.merge(record)
 
     def delete_deployment(self, deployment_id: str) -> None:

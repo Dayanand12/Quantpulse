@@ -183,6 +183,19 @@ def generate_all_time_report(
     return _write_report(trades, deployment_repository, filename)
 
 
+# Below this many trades, a win rate/profit factor reads as noise (a
+# couple of lucky/unlucky trades looking "hot"/"cold") — same guard the
+# Performance tab's heatmap uses (frontend/src/components/analytics/
+# StrategyHeatmap.tsx's MIN_SAMPLE), so a spreadsheet reader gets the
+# same "don't trust this yet" signal the UI already shows instead of
+# mistaking a 2-trade 100%-win-rate row for an edge.
+_MIN_SAMPLE_SIZE = 10
+
+
+def _sample_flag(total_trades: int) -> str:
+    return "OK" if total_trades >= _MIN_SAMPLE_SIZE else f"Low (<{_MIN_SAMPLE_SIZE})"
+
+
 def _condition_breakdown_rows(trades: List[Trade]) -> List[dict]:
     """One row per (strategy, market_condition) pair with at least one
     trade — Trend/Volume/VWAP split into their own columns (see
@@ -214,7 +227,54 @@ def _condition_breakdown_rows(trades: List[Trade]) -> List[dict]:
             "Profit Factor": round(m.profit_factor, 2) if m.profit_factor is not None else None,
             "Total P&L": round(m.total_pnl, 2),
             "Avg R-Multiple": round(m.avg_r_multiple, 2) if m.avg_r_multiple is not None else None,
+            "Sample Size": _sample_flag(m.total_trades),
         })
+    return sorted(rows, key=lambda r: r["Trades"], reverse=True)
+
+
+# Dimension -> column header, for every regime field core/domain/
+# regime_snapshot.py computes at entry — consolidated into ONE sheet with
+# a "Dimension" column below (_regime_breakdown_rows) instead of five
+# separate sheets, so "which strategy wins when VIX is High" is one Excel
+# filter away instead of a sheet hunt.
+_REGIME_DIMENSIONS = {
+    "regime_trend": "Trend",
+    "regime_volatility": "Volatility",
+    "index_trend": "Index Trend",
+    "vix_bucket": "VIX Level",
+    "session_phase": "Session",
+}
+
+
+def _regime_breakdown_rows(trades: List[Trade]) -> List[dict]:
+    """One row per (strategy, dimension, value) triple with at least one
+    trade, across every regime dimension in _REGIME_DIMENSIONS. Trades
+    where a given dimension wasn't recorded (pre-dates regime logging, or
+    that dimension's inputs weren't available — e.g. INDIA VIX off the
+    watchlist) are simply excluded from that dimension's rows, same
+    convention as _condition_breakdown_rows above."""
+    rows = []
+    for field, label in _REGIME_DIMENSIONS.items():
+        groups: Dict[tuple, List[Trade]] = defaultdict(list)
+        for t in trades:
+            value = getattr(t, field)
+            if not t.strategy_name or not value:
+                continue
+            groups[(t.strategy_name, value)].append(t)
+
+        for (strategy_name, value), group in groups.items():
+            m = compute_performance_metrics(group, capital=0)
+            rows.append({
+                "Strategy": strategy_name,
+                "Dimension": label,
+                "Value": value,
+                "Trades": m.total_trades,
+                "Win Rate %": round(m.win_rate, 2) if m.win_rate is not None else None,
+                "Profit Factor": round(m.profit_factor, 2) if m.profit_factor is not None else None,
+                "Total P&L": round(m.total_pnl, 2),
+                "Avg R-Multiple": round(m.avg_r_multiple, 2) if m.avg_r_multiple is not None else None,
+                "Sample Size": _sample_flag(m.total_trades),
+            })
     return sorted(rows, key=lambda r: r["Trades"], reverse=True)
 
 
@@ -228,11 +288,13 @@ def export_performance_report(
     computed for whatever filters are active on screen, as a workbook:
     the filters that produced this data (so the file is self-explanatory
     once it's out of the browser), the per-strategy summary table shown
-    on screen, and a per-(strategy, market condition) breakdown for
-    sorting/filtering on which market condition a strategy actually wins
-    in. `by_strategy` entries carry a raw PerformanceMetrics object (not
-    yet asdict'd) — same list server/main.py builds before serializing it
-    for the JSON response.
+    on screen, a per-(strategy, market condition) breakdown, and a per-
+    (strategy, regime dimension, value) breakdown (Trend/Volatility/Index
+    Trend/VIX Level/Session — core/domain/regime_snapshot.py) for
+    sorting/filtering on which condition or regime a strategy actually
+    wins in. `by_strategy` entries carry a raw PerformanceMetrics object
+    (not yet asdict'd) — same list server/main.py builds before
+    serializing it for the JSON response.
     """
     filters_df = pd.DataFrame([
         {"Filter": "Strategy", "Value": filters.get("strategy") or "All"},
@@ -255,10 +317,12 @@ def export_performance_report(
         summary_df = summary_df[cols]
 
     condition_df = pd.DataFrame(_condition_breakdown_rows(trades))
+    regime_df = pd.DataFrame(_regime_breakdown_rows(trades))
 
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         filters_df.to_excel(writer, sheet_name="Filters Applied", index=False)
         summary_df.to_excel(writer, sheet_name="Strategy Summary", index=False)
         condition_df.to_excel(writer, sheet_name="By Market Condition", index=False)
+        regime_df.to_excel(writer, sheet_name="By Regime", index=False)
     return buffer.getvalue()

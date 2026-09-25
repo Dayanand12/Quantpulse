@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react"
-import { BrowserRouter, Route, Routes } from "react-router-dom"
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { Layout } from "./components/Layout"
 import { LiveDashboard } from "./pages/LiveDashboard"
 import { Positions } from "./pages/Positions"
@@ -8,8 +8,12 @@ import { Performance } from "./pages/Performance"
 import { Screener } from "./pages/Screener"
 import { MarketAnalysis } from "./pages/MarketAnalysis"
 import { Strategies } from "./pages/Strategies"
+import { DeployedStrategies } from "./pages/DeployedStrategies"
+import { AvailableStrategies } from "./pages/AvailableStrategies"
 import { Backtest } from "./pages/Backtest"
+import { BacktestRun } from "./pages/BacktestRun"
 import { OptionsBacktest } from "./pages/OptionsBacktest"
+import { OptionsBacktestRun } from "./pages/OptionsBacktestRun"
 import { Analysis } from "./pages/Analysis"
 import { OptionsAnalysis } from "./pages/OptionsAnalysis"
 import { Settings } from "./pages/Settings"
@@ -32,11 +36,21 @@ export default function App() {
           <Route path="performance" element={<Performance />} />
           <Route path="screener" element={<Screener />} />
           <Route path="market-analysis" element={<MarketAnalysis />} />
-          <Route path="strategies" element={<Strategies />} />
-          <Route path="backtest" element={<Backtest />} />
-          <Route path="options-backtest" element={<OptionsBacktest />} />
-          <Route path="analysis" element={<Analysis />} />
-          <Route path="options-analysis" element={<OptionsAnalysis />} />
+          <Route path="strategies" element={<Strategies />}>
+            <Route index element={<Navigate to="deployed" replace />} />
+            <Route path="deployed" element={<DeployedStrategies />} />
+            <Route path="available" element={<AvailableStrategies />} />
+          </Route>
+          <Route path="backtest" element={<Backtest />}>
+            <Route index element={<Navigate to="run" replace />} />
+            <Route path="run" element={<BacktestRun />} />
+            <Route path="analysis" element={<Analysis />} />
+          </Route>
+          <Route path="options-backtest" element={<OptionsBacktest />}>
+            <Route index element={<Navigate to="run" replace />} />
+            <Route path="run" element={<OptionsBacktestRun />} />
+            <Route path="analysis" element={<OptionsAnalysis />} />
+          </Route>
           <Route
             path="strategy-builder"
             element={

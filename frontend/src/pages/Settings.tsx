@@ -32,7 +32,7 @@ export function Settings() {
         <p className="mt-4 text-sm text-[var(--ink-muted)]">
           Editable capital is planned for a later iteration. Strategy deployments (which
           symbols trade, how much capital, risk parameters) are managed on the{" "}
-          <Link to="/strategies" className="text-[var(--accent)] hover:underline">
+          <Link to="/strategies/available" className="text-[var(--accent)] hover:underline">
             Strategies
           </Link>{" "}
           page.

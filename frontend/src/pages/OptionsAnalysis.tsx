@@ -50,6 +50,9 @@ function pnlColor(v: number | null): string {
 // option rows for it specifically (0.1s via this page's endpoint).
 // Strike/expiry/side render as real columns here instead of being buried
 // in one long symbol string.
+//
+// "Analysis" tab of the Options Backtest page — see OptionsBacktest.tsx
+// for the tab host and OptionsBacktestRun.tsx for the "Run" tab.
 export function OptionsAnalysis() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [strategy, setStrategy] = useState("")
@@ -178,14 +181,11 @@ export function OptionsAnalysis() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Options Analysis</h1>
-        <p className="mt-1 text-sm text-[var(--ink-muted)]">
-          Every option backtest ever logged for a strategy (single runs and chain sweeps alike) —
-          strike/expiry/side as real columns, filtered server-side so a strategy with thousands of swept
-          contracts stays fast to browse.
-        </p>
-      </div>
+      <p className="text-sm text-[var(--ink-muted)]">
+        Every option backtest ever logged for a strategy (single runs and chain sweeps alike) —
+        strike/expiry/side as real columns, filtered server-side so a strategy with thousands of swept
+        contracts stays fast to browse.
+      </p>
 
       <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] p-5 backdrop-blur-sm">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

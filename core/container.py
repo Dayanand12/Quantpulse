@@ -114,6 +114,7 @@ def build_deployment_runtime(
     event_bus: IEventBus,
     strategy_registry: IStrategyRegistry,
     charge_config_repository: IChargeConfigRepository,
+    watchlist_repository: IWatchlistRepository,
 ) -> DeploymentRuntime:
     """One running strategy instance's full stack: its own capital pool
     (PaperBroker behind order_repository/portfolio_service) and its own
@@ -144,6 +145,8 @@ def build_deployment_runtime(
         trailing_pct=deployment.config.trailing_pct,
         max_cycles_per_day=deployment.config.max_cycles_per_day,
         timeframe=deployment.config.timeframe,
+        watchlist_repository=watchlist_repository,
+        watchlist_id=deployment.watchlist_id,
     )
 
     return DeploymentRuntime(
@@ -281,7 +284,12 @@ def build_container(settings: Settings, zerodha_client: ZerodhaClient) -> Contai
 
         deployment_runtimes.append(
             build_deployment_runtime(
-                deployment, live_engine, event_bus, strategy_registry, charge_config_repository
+                deployment,
+                live_engine,
+                event_bus,
+                strategy_registry,
+                charge_config_repository,
+                watchlist_repository,
             )
         )
 

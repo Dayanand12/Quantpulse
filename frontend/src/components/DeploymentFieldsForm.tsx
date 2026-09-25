@@ -1,4 +1,4 @@
-import type { CandleTimeframe, DeploymentInput, StrategyInfo } from "../lib/types"
+import type { CandleTimeframe, DeploymentInput, StrategyInfo, Watchlist } from "../lib/types"
 
 const TIMEFRAME_OPTIONS: Array<{ value: CandleTimeframe; label: string }> = [
   { value: "minute", label: "1 minute" },
@@ -38,6 +38,11 @@ interface DeploymentFieldsFormProps {
   setForm: (updater: (f: DeploymentInput) => DeploymentInput) => void
   strategies: StrategyInfo[]
   watchlist: string[]
+  // Named watchlists (id/name/symbols) this deployment can bind to
+  // instead of a fixed symbol list — see lib/types.ts's Deployment
+  // docstring. A bound deployment re-reads that watchlist's current
+  // membership live, no restart needed when it's edited.
+  namedWatchlists: Watchlist[]
 }
 
 // Every editable field on a deployment — shared by the "New Deployment"
@@ -47,6 +52,7 @@ export function DeploymentFieldsForm({
   setForm,
   strategies,
   watchlist,
+  namedWatchlists,
 }: DeploymentFieldsFormProps) {
   function toggleSymbol(symbol: string) {
     setForm((f) => ({
@@ -56,6 +62,8 @@ export function DeploymentFieldsForm({
         : [...f.symbols, symbol],
     }))
   }
+
+  const boundWatchlist = namedWatchlists.find((w) => w.id === form.watchlist_id) ?? null
 
   return (
     <>
@@ -133,36 +141,97 @@ export function DeploymentFieldsForm({
       )}
 
       <div className="mt-4">
-        <span className="text-xs text-[var(--ink-muted)]">Symbols (from Watchlist)</span>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {watchlist.length === 0 && (
-            <span className="text-xs text-[var(--ink-muted)]">
-              Watchlist is empty — add symbols on the Settings page first.
-            </span>
-          )}
-          {watchlist.map((symbol) => {
-            const selected = form.symbols.includes(symbol)
-            return (
-              <button
-                key={symbol}
-                type="button"
-                onClick={() => toggleSymbol(symbol)}
-                className="rounded-full px-3 py-1 text-xs"
-                style={{
-                  background: selected ? "var(--accent)" : "var(--surface-2)",
-                  color: selected ? "white" : "var(--ink-secondary)",
-                }}
-              >
-                {symbol}
-              </button>
-            )
-          })}
+        <div className="mb-2 flex items-center gap-3">
+          <span className="text-xs text-[var(--ink-muted)]">Symbols</span>
+          <div className="flex gap-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setForm((f) => ({ ...f, watchlist_id: null }))}
+              className="rounded-full px-3 py-1"
+              style={{
+                background: form.watchlist_id === null ? "var(--accent)" : "var(--surface-2)",
+                color: form.watchlist_id === null ? "white" : "var(--ink-secondary)",
+              }}
+            >
+              Pick manually
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setForm((f) => ({ ...f, watchlist_id: namedWatchlists[0]?.id ?? null, symbols: [] }))
+              }
+              disabled={namedWatchlists.length === 0}
+              className="rounded-full px-3 py-1 disabled:opacity-40"
+              style={{
+                background: form.watchlist_id !== null ? "var(--accent)" : "var(--surface-2)",
+                color: form.watchlist_id !== null ? "white" : "var(--ink-secondary)",
+              }}
+            >
+              Use a watchlist
+            </button>
+          </div>
         </div>
+
+        {form.watchlist_id !== null ? (
+          <div className="flex flex-col gap-2">
+            <select
+              value={form.watchlist_id}
+              onChange={(e) => setForm((f) => ({ ...f, watchlist_id: Number(e.target.value) }))}
+              className={fieldClass}
+            >
+              {namedWatchlists.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} ({w.symbols.length} symbols)
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-[var(--ink-muted)]">
+              Trades whatever {boundWatchlist?.name ?? "this watchlist"} currently contains —
+              editing the watchlist later updates this deployment live, no restart needed.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {(boundWatchlist?.symbols ?? []).map((symbol) => (
+                <span
+                  key={symbol}
+                  className="rounded bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--ink-secondary)]"
+                >
+                  {symbol}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {watchlist.length === 0 && (
+              <span className="text-xs text-[var(--ink-muted)]">
+                Watchlist is empty — add symbols on the Settings page first.
+              </span>
+            )}
+            {watchlist.map((symbol) => {
+              const selected = form.symbols.includes(symbol)
+              return (
+                <button
+                  key={symbol}
+                  type="button"
+                  onClick={() => toggleSymbol(symbol)}
+                  className="rounded-full px-3 py-1 text-xs"
+                  style={{
+                    background: selected ? "var(--accent)" : "var(--surface-2)",
+                    color: selected ? "white" : "var(--ink-secondary)",
+                  }}
+                >
+                  {symbol}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
     </>
   )
 }
 
 export function isDeploymentFormValid(form: DeploymentInput): boolean {
-  return Boolean(form.strategy_name) && form.symbols.length > 0 && form.start_time < form.end_time
+  const hasSymbolSource = form.watchlist_id !== null || form.symbols.length > 0
+  return Boolean(form.strategy_name) && hasSymbolSource && form.start_time < form.end_time
 }

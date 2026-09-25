@@ -23,6 +23,38 @@ import type { StrategyBreakdown, Trade } from "../lib/types"
 
 const PERIOD_LABEL = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" } as const
 
+// Trade fields under data.heatmap_strategy_regime (core/domain/
+// regime_snapshot.py) the picker below switches between — one extra
+// dimension here is a one-line addition, no new fetch needed since the
+// backend already sends every dimension's heatmap in one response.
+const REGIME_DIMENSIONS = [
+  {
+    value: "regime_trend",
+    label: "Trend",
+    subtitle: "Win rate by strategy and the traded symbol's own trend/momentum regime at entry",
+  },
+  {
+    value: "regime_volatility",
+    label: "Volatility",
+    subtitle: "Win rate by strategy and the traded symbol's own volatility state at entry",
+  },
+  {
+    value: "index_trend",
+    label: "Index Trend",
+    subtitle: "Win rate by strategy and NIFTY 50's own trend at entry — a stock can trend while the index chops",
+  },
+  {
+    value: "vix_bucket",
+    label: "VIX Level",
+    subtitle: "Win rate by strategy and the India VIX level bucket at entry",
+  },
+  {
+    value: "session_phase",
+    label: "Session",
+    subtitle: "Win rate by strategy and time of day (Opening/Mid-day/Closing)",
+  },
+] as const
+
 export function Performance() {
   const { filters, setFilters, resetFilters, data, loading, error } = useAnalytics()
   const showSkeleton = loading && !data
@@ -37,6 +69,8 @@ export function Performance() {
 
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+
+  const [regimeDimension, setRegimeDimension] = useState<string>(REGIME_DIMENSIONS[0].value)
 
   async function handleDownloadReport() {
     setExporting(true)
@@ -99,7 +133,7 @@ export function Performance() {
             type="button"
             onClick={handleDownloadReport}
             disabled={exporting || !data}
-            title="Download the strategy summary and a per-strategy market-condition breakdown as .xlsx, for whatever filters are set above"
+            title="Download the strategy summary, a per-strategy market-condition breakdown, and a per-strategy regime breakdown (Trend/Volatility/Index Trend/VIX/Session) as .xlsx, for whatever filters are set above"
             className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--page)] disabled:opacity-50"
           >
             {exporting ? "Exporting…" : "Download Report"}
@@ -191,6 +225,31 @@ export function Performance() {
               rows={data.heatmap_strategy_condition}
               columnLabel="Market Condition"
               emptySubtitle="Needs closed trades with a strategy and a recorded entry market condition."
+            />
+          </ChartCard>
+
+          <ChartCard
+            title="Strategy × Regime"
+            subtitle={REGIME_DIMENSIONS.find((d) => d.value === regimeDimension)?.subtitle}
+            action={
+              <select
+                aria-label="Regime dimension"
+                value={regimeDimension}
+                onChange={(e) => setRegimeDimension(e.target.value)}
+                className="rounded-xl border border-[var(--glass-border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs text-[var(--ink-primary)] outline-none transition-colors focus:border-[var(--accent)]"
+              >
+                {REGIME_DIMENSIONS.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            }
+          >
+            <StrategyHeatmap
+              rows={data.heatmap_strategy_regime[regimeDimension] ?? []}
+              columnLabel={REGIME_DIMENSIONS.find((d) => d.value === regimeDimension)?.label ?? ""}
+              emptySubtitle="Needs closed trades with a strategy and this regime dimension recorded at entry — only trades taken since regime logging shipped will have it."
             />
           </ChartCard>
 

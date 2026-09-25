@@ -34,6 +34,7 @@ from core.domain.metrics import (
     drawdown_series,
     equity_curve,
     heatmap_by_strategy_and_condition,
+    heatmap_by_strategy_and_field,
     heatmap_by_strategy_and_symbol,
     pnl_by_period,
     profit_distribution,
@@ -497,6 +498,16 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             )
         return result
 
+    # Regime dimensions (core/domain/regime_snapshot.py) exposed as their
+    # own Strategy heatmaps under one "heatmap_strategy_regime" dict keyed
+    # by field name — the Performance tab's dimension picker just needs
+    # the Trade field name it already knows about, so adding a future
+    # dimension here is a one-line change instead of a new top-level
+    # response key + a new frontend fetch each time.
+    _REGIME_HEATMAP_FIELDS = (
+        "regime_trend", "regime_volatility", "index_trend", "vix_bucket", "session_phase",
+    )
+
     # -----------------------------
     # REST: performance analytics (persisted trade history — survives
     # restarts and spans deleted deployments, unlike aggregate_broker_status
@@ -601,6 +612,10 @@ def create_app(container: Container, settings: Settings) -> FastAPI:
             "heatmap_strategy_condition": [
                 asdict(r) for r in heatmap_by_strategy_and_condition(trades)
             ],
+            "heatmap_strategy_regime": {
+                field: [asdict(r) for r in heatmap_by_strategy_and_field(trades, field)]
+                for field in _REGIME_HEATMAP_FIELDS
+            },
             "strategy_trend": [asdict(p) for p in strategy_trend(trades, timeframe)],
             "strategy_correlation": [asdict(p) for p in strategy_correlation(trades)],
             "available_strategies": available_strategies,
